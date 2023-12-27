@@ -20,25 +20,25 @@
 
         <!-- These properties are needed in order for them to be resolvable by the generated projects -->
         <compiler-plugin.version>3.11.0</compiler-plugin.version>
-        <kotlin.version>1.9.10</kotlin.version>
-        <dokka.version>1.9.0</dokka.version>
-        <scala.version>2.13.8</scala.version>
+        <kotlin.version>1.9.21</kotlin.version>
+        <dokka.version>1.9.10</dokka.version>
+        <scala.version>2.13.12</scala.version>
         <scala-maven-plugin.version>4.8.1</scala-maven-plugin.version>
         <!-- not pretty but this is used in the codestarts and we don't want to break compatibility -->
         <scala-plugin.version>${scala-maven-plugin.version}</scala-plugin.version>
 
         <version.enforcer.plugin>3.2.1</version.enforcer.plugin>
-        <version.surefire.plugin>3.1.2</version.surefire.plugin>
+        <version.surefire.plugin>3.2.3</version.surefire.plugin>
         <version.exec.plugin>3.0.0</version.exec.plugin>
         <failsafe-plugin.version>${version.surefire.plugin}</failsafe-plugin.version>
 
         <!-- Jandex versions -->
-        <jandex.version>3.1.5</jandex.version>
+        <jandex.version>3.1.6</jandex.version>
         <jandex-gradle-plugin.version>1.0.0</jandex-gradle-plugin.version>
 
         <asciidoctorj.version>2.5.10</asciidoctorj.version>
         <htmlunit.version>2.70.0</htmlunit.version>
-        <javaparser-core.version>3.25.5</javaparser-core.version>
+        <javaparser-core.version>3.25.6</javaparser-core.version>
         <jdeparser.version>2.0.3.Final</jdeparser.version>
         <subethasmtp.version>6.0.1</subethasmtp.version>
 
@@ -62,17 +62,20 @@
         <supported-maven-versions>[3.8.2,)</supported-maven-versions>
 
         <!-- These 2 properties are used by CreateProjectMojo to add the Maven Wrapper -->
-        <proposed-maven-version>3.9.5</proposed-maven-version>
+        <proposed-maven-version>3.9.6</proposed-maven-version>
         <maven-wrapper.version>3.2.0</maven-wrapper.version>
-        <gradle-wrapper.version>8.4</gradle-wrapper.version>
+        <gradle-wrapper.version>8.5</gradle-wrapper.version>
         <quarkus-gradle-plugin.version>${project.version}</quarkus-gradle-plugin.version>
         <quarkus-maven-plugin.version>${project.version}</quarkus-maven-plugin.version>
         <maven-plugin-plugin.version>3.8.1</maven-plugin-plugin.version>
 
         <!-- MicroProfile TCK versions used to be defined here but have moved to the concrete tck modules -->
 
+        <!-- Panache needs to run the hibernate-jpamodelgen annotation processor,
+             and unfortunately annotation processors are not covered by dependency management -->
+        <hibernate-orm.version>6.4.0.Final</hibernate-orm.version>
         <!-- Antlr 4 is used by the PanacheQL parser but also needs to match the requirements of Hibernate ORM 6.x-->
-        <antlr.version>4.10.1</antlr.version>
+        <antlr.version>4.13.0</antlr.version>
 
         <!-- SELinux access label, used when mounting local volumes into containers in tests -->
         <volume.access.modifier>:Z</volume.access.modifier>
@@ -101,20 +104,20 @@
 
         <!-- The image to use for tests that run Keycloak -->
         <!-- IMPORTANT: If this is changed you must also update bom/application/pom.xml and KeycloakBuildTimeConfig/DevServicesConfig in quarkus-oidc/deployment to match the version -->
-        <keycloak.version>22.0.5</keycloak.version>
+        <keycloak.version>23.0.1</keycloak.version>
         <keycloak.wildfly.version>19.0.3</keycloak.wildfly.version>
         <keycloak.docker.image>quay.io/keycloak/keycloak:${keycloak.version}</keycloak.docker.image>
         <keycloak.docker.legacy.image>quay.io/keycloak/keycloak:${keycloak.wildfly.version}-legacy</keycloak.docker.legacy.image>
 
-        <unboundid-ldap.version>6.0.9</unboundid-ldap.version>
+        <unboundid-ldap.version>6.0.11</unboundid-ldap.version>
 
         <assertj.version>3.24.2</assertj.version>
 
-        <wiremock.version>3.2.0</wiremock.version>
+        <wiremock.version>3.3.1</wiremock.version>
         <wiremock-maven-plugin.version>7.3.0</wiremock-maven-plugin.version>
 
         <!-- Artemis test dependencies -->
-        <artemis.version>2.31.0</artemis.version>
+        <artemis.version>2.31.2</artemis.version>
 
         <!-- Code Coverage Properties-->
         <jacoco.agent.argLine></jacoco.agent.argLine>
@@ -131,7 +134,7 @@
         <!-- revapi API check -->
         <revapi-maven-plugin.version>0.14.7</revapi-maven-plugin.version>
         <revapi-java-plugin.version>0.26.1</revapi-java-plugin.version>
-        <build-helper-plugin.version>3.4.0</build-helper-plugin.version>
+        <build-helper-plugin.version>3.5.0</build-helper-plugin.version>
         <revapi-reporter-text.version>0.14.5</revapi-reporter-text.version>
         <revapi-reporter-json.version>0.4.5</revapi-reporter-json.version>
         <!-- Latest release to be used by api-compatibility-check to check backwards compatibility of the Quarkus API. -->
@@ -171,13 +174,13 @@
         <quarkus.analytics.disabled>true</quarkus.analytics.disabled>
 
         <!-- Dev UI -->
-        <vaadin.version>24.1.10</vaadin.version>
-        <lit.version>2.8.0</lit.version>
-        <lit-element.version>3.3.3</lit-element.version>
-        <lit-html.version>2.8.0</lit-html.version>
-        <ssr-dom-shim.version>1.1.1</ssr-dom-shim.version>
-        <trusted-types.version>2.0.4</trusted-types.version>
-        <reactive-element.version>1.6.3</reactive-element.version>
+        <vaadin.version>24.3.0</vaadin.version>
+        <lit.version>3.1.0</lit.version>
+        <lit-element.version>4.0.2</lit-element.version>
+        <lit-html.version>3.1.0</lit-html.version>
+        <ssr-dom-shim.version>1.1.2</ssr-dom-shim.version>
+        <trusted-types.version>2.0.7</trusted-types.version>
+        <reactive-element.version>2.0.2</reactive-element.version>
         <vaadin-usage-statistics.version>2.1.2</vaadin-usage-statistics.version>
         <vaadin-development-mode-detector.version>2.0.6</vaadin-development-mode-detector.version>
         <polymer.version>3.5.1</polymer.version>
@@ -187,7 +190,7 @@
         <lit-state.version>1.7.0</lit-state.version>
         <echarts.version>5.4.3</echarts.version>
         <wc-codemirror.version>2.1.0</wc-codemirror.version>
-        <es-module-shims.version>1.8.0</es-module-shims.version>
+        <es-module-shims.version>1.8.2</es-module-shims.version>
         <path-to-regexp.version>2.4.0</path-to-regexp.version>
     </properties>
 
@@ -294,6 +297,11 @@
                 <artifactId>quarkus-security-test-utils</artifactId>
                 <version>${project.version}</version>
                 <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-arc-test-supplement</artifactId>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.assertj</groupId>
@@ -906,7 +914,7 @@
                         <dependency>
                             <groupId>org.apache.groovy</groupId>
                             <artifactId>groovy</artifactId>
-                            <version>4.0.15</version>
+                            <version>4.0.17</version>
                         </dependency>
                     </dependencies>
                 </plugin>
@@ -1114,12 +1122,12 @@
                             </execution>
                         </executions>
                         <configuration>
-                            <jdkVersion>11</jdkVersion>
+                            <jdkVersion>17</jdkVersion>
                             <outputFormat>html</outputFormat>
                             <externalDocumentationLinks>
                                 <link>
                                     <!-- Root URL of the generated documentation to link with. The trailing slash is required! -->
-                                    <url>https://docs.oracle.com/en/java/javase/11/docs/api/</url>
+                                    <url>https://docs.oracle.com/en/java/javase/17/docs/api/</url>
                                 </link>
                             </externalDocumentationLinks>
                         </configuration>

@@ -539,7 +539,7 @@ You can find instructions on how to quickly set up this application in this guid
 
 This debugging guide has the following requirements:
 
-* JDK 11 installed with `JAVA_HOME` configured appropriately
+* JDK 17 installed with `JAVA_HOME` configured appropriately
 * Apache Maven {maven-version}
 * A working container runtime (Docker, podman)
 
@@ -589,13 +589,6 @@ quarkus.native.builder-image=quay.io/quarkus/ubi-quarkus-mandrel-builder-image:{
 quarkus.container-image.build=true
 quarkus.container-image.group=test
 ----
-
-[IMPORTANT]
-====
-Starting with 22.3, Mandrel does not provide a `-java11` version anymore.
-Note, however,  that this doesn't mean that you may no longer produce native executables with Mandrel for Java 11 projects.
-You can still compile your Java 11 projects using OpenJDK 11 and produce native executables from the resulting Java 11 bytecode using the `-java17` Mandrel builder images.
-====
 
 === First Debugging Steps
 
@@ -846,8 +839,8 @@ we need the following cypher script which will import the data within the CSV fi
 
 [source,cypher]
 ----
-CREATE CONSTRAINT unique_vm_id ON (v:VM) ASSERT v.vmId IS UNIQUE;
-CREATE CONSTRAINT unique_method_id ON (m:Method) ASSERT m.methodId IS UNIQUE;
+CREATE CONSTRAINT unique_vm_id FOR (v:VM) REQUIRE v.vmId IS UNIQUE;
+CREATE CONSTRAINT unique_method_id FOR (m:Method) REQUIRE m.methodId IS UNIQUE;
 
 LOAD CSV WITH HEADERS FROM 'file:///reports/call_tree_vm.csv' AS row
 MERGE (v:VM {vmId: row.Id, name: row.Name})

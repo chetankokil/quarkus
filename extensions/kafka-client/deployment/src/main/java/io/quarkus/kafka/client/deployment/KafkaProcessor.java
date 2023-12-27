@@ -276,7 +276,6 @@ public class KafkaProcessor {
                 .produce(ReflectiveClassBuildItem.builder(StickyAssignor.class.getName()).build());
 
         handleAvro(reflectiveClass, proxies, serviceProviders, sslNativeSupport, capabilities);
-        handleOpenTracing(reflectiveClass, capabilities);
 
     }
 
@@ -315,18 +314,6 @@ public class KafkaProcessor {
         if (capabilities.isPresent(Capability.KUBERNETES_SERVICE_BINDING)) {
             recorder.checkBoostrapServers();
         }
-    }
-
-    private void handleOpenTracing(BuildProducer<ReflectiveClassBuildItem> reflectiveClass, Capabilities capabilities) {
-        //opentracing contrib kafka interceptors: https://github.com/opentracing-contrib/java-kafka-client
-        if (!capabilities.isPresent(Capability.OPENTRACING)
-                || !QuarkusClassLoader.isClassPresentAtRuntime("io.opentracing.contrib.kafka.TracingProducerInterceptor")) {
-            return;
-        }
-
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder("io.opentracing.contrib.kafka.TracingProducerInterceptor",
-                "io.opentracing.contrib.kafka.TracingConsumerInterceptor").methods()
-                .build());
     }
 
     private void handleAvro(BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
@@ -369,11 +356,18 @@ public class KafkaProcessor {
                     "java.lang.AutoCloseable"));
         }
 
-        // --- Apicurio Registry 2.x ---
+        // --- Apicurio Registry 2.x Avro ---
         if (QuarkusClassLoader.isClassPresentAtRuntime("io.apicurio.registry.serde.avro.AvroKafkaDeserializer")
                 && !capabilities.isPresent(Capability.APICURIO_REGISTRY_AVRO)) {
             throw new RuntimeException(
                     "Apicurio Registry 2.x Avro classes detected, please use the quarkus-apicurio-registry-avro extension");
+        }
+
+        // --- Apicurio Registry 2.x Json Schema ---
+        if (QuarkusClassLoader.isClassPresentAtRuntime("io.apicurio.registry.serde.avro.JsonKafkaDeserializer")
+                && !capabilities.isPresent(Capability.APICURIO_REGISTRY_JSON_SCHEMA)) {
+            throw new RuntimeException(
+                    "Apicurio Registry 2.x Json classes detected, please use the quarkus-apicurio-registry-json extension");
         }
     }
 

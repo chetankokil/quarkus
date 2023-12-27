@@ -6,6 +6,7 @@ https://github.com/quarkusio/quarkus/tree/main/docs/src/main/asciidoc
 = Vert.x Reference Guide
 include::_attributes.adoc[]
 :categories: miscellaneous
+:keywords: vertx event verticle
 :summary: This reference guide provides advanced details about the usage and the configuration of the Vert.x instance used by Quarkus.
 
 https://vertx.io[Vert.x] is a toolkit for building reactive applications.
@@ -514,6 +515,22 @@ public String consume(String name) {
 }
 ----
 <1> Receive the messages sent to the `greeting` address
+
+The address value can be a property expression.
+In this case, the configured value is used instead: `@ConsumeEvent("${my.consumer.address}")`.
+Additionally, the property expression can specify a default value: `@ConsumeEvent("${my.consumer.address:defaultAddress}")`.
+
+.Config Property Example
+[source, java]
+----
+@ConsumeEvent("${my.consumer.address}")   // <1>
+public String consume(String name) {
+    return name.toLowerCase();
+}
+----
+<1> Receive the messages sent to the address configured with the `my.consumer.address` key. 
+
+NOTE: If no config property with the specified key exists and no default value is set then the application startup fails. 
 
 === Process events asynchronously
 

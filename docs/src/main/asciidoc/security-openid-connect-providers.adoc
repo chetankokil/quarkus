@@ -8,7 +8,7 @@ https://github.com/quarkusio/quarkus/tree/main/docs/src/main/asciidoc
 include::_attributes.adoc[]
 :diataxis-type: concept
 :categories: security,web
-:keywords: oidc github twitter google facebook mastodon microsoft apple spotify twitch
+:keywords: oidc github twitter google facebook mastodon microsoft apple spotify twitch linkedin
 :toclevels: 3
 :topics: security,oidc,github,twitter,google,facebook,mastodon,microsoft,apple,spotify,twitch
 :extensions: io.quarkus:quarkus-oidc
@@ -501,6 +501,31 @@ quarkus.oidc.client-id=<Client ID>
 quarkus.oidc.credentials.client-secret=<Client Secret>
 ----
 
+[[linkedin]]
+=== LinkedIn
+
+Create a https://developer.linkedin.com/[LinkedIn application]:
+
+image::oidc-linkedin-1.png[role="thumb"]
+
+Add the `Sign In with LinkedIn using OpenId Connect` product:
+
+image::oidc-linkedin-2.png[role="thumb"]
+
+You now can get your client id and secret. Don't forget to also add the authorized redirect URLs for your application:
+
+image::oidc-linkedin-3.png[role="thumb"]
+
+You can now configure your `application.properties`:
+
+[source,properties]
+----
+quarkus.oidc.provider=linkedin
+quarkus.oidc.client-id=<Client ID>
+quarkus.oidc.credentials.client-secret=<Client Secret>
+----
+
+
 
 [[provider-scope]]
 == Provider scopes
@@ -662,7 +687,7 @@ The pattern of authenticating with a given provider, where the endpoint uses eit
 
 == HTTPS Redirect URL
 
-Some providers will only accept HTTPS-based redirect URLs. Tools such as https://ngrok.com/[ngrok] https://linuxhint.com/set-up-use-ngrok/[can be set up] to help testing such providers with Quarkus endpoints running on localhost in devmode.
+Some providers will only accept HTTPS-based redirect URLs. Tools such as https://ngrok.com/[ngrok] https://linuxhint.com/set-up-use-ngrok/[can be set up] to help testing such providers with Quarkus endpoints running on localhost in dev mode.
 
 == Rate Limiting
 

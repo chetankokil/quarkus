@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.inject.Inject;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -24,7 +25,9 @@ import io.quarkus.oidc.TokenIntrospectionCache;
 import io.quarkus.oidc.TokenStateManager;
 import io.quarkus.oidc.UserInfo;
 import io.quarkus.oidc.UserInfoCache;
+import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.spi.runtime.BlockingSecurityExecutor;
+import io.quarkus.security.spi.runtime.SecurityEventHelper;
 import io.smallrye.mutiny.Uni;
 import io.vertx.ext.web.RoutingContext;
 
@@ -68,12 +71,15 @@ public class DefaultTenantConfigResolver {
 
     private final BlockingTaskRunner<OidcTenantConfig> blockingRequestContext;
 
-    private volatile boolean securityEventObserved;
+    private final boolean securityEventObserved;
 
     private ConcurrentHashMap<String, BackChannelLogoutTokenCache> backChannelLogoutTokens = new ConcurrentHashMap<>();
 
-    public DefaultTenantConfigResolver(BlockingSecurityExecutor blockingExecutor) {
+    public DefaultTenantConfigResolver(BlockingSecurityExecutor blockingExecutor, BeanManager beanManager,
+            @ConfigProperty(name = "quarkus.security.events.enabled") boolean securityEventsEnabled) {
         this.blockingRequestContext = new BlockingTaskRunner<OidcTenantConfig>(blockingExecutor);
+        this.securityEventObserved = SecurityEventHelper.isEventObserved(new SecurityEvent(null, (SecurityIdentity) null),
+                beanManager, securityEventsEnabled);
     }
 
     @PostConstruct
@@ -152,9 +158,12 @@ public class DefaultTenantConfigResolver {
         if (tenantId == null && context.get(CURRENT_STATIC_TENANT_ID_NULL) == null) {
             if (tenantResolver.isResolvable()) {
                 tenantId = tenantResolver.get().resolve(context);
-            } else if (tenantConfigBean.getStaticTenantsConfig().size() > 0) {
+            }
+
+            if (tenantId == null && tenantConfigBean.getStaticTenantsConfig().size() > 0) {
                 tenantId = defaultStaticTenantResolver.resolve(context);
             }
+
             if (tenantId == null) {
                 tenantId = context.get(OidcUtils.TENANT_ID_ATTRIBUTE);
             }
@@ -184,10 +193,6 @@ public class DefaultTenantConfigResolver {
 
     boolean isSecurityEventObserved() {
         return securityEventObserved;
-    }
-
-    void setSecurityEventObserved(boolean securityEventObserved) {
-        this.securityEventObserved = securityEventObserved;
     }
 
     Event<SecurityEvent> getSecurityEvent() {

@@ -10,11 +10,9 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -89,12 +87,8 @@ public class NativeImageBuildStep {
     @BuildStep(onlyIf = NativeBuild.class)
     ArtifactResultBuildItem result(NativeImageBuildItem image) {
         NativeImageBuildItem.GraalVMVersion graalVMVersion = image.getGraalVMInfo();
-        Map<String, Object> graalVMInfoProps = new HashMap<>();
-        graalVMInfoProps.put("graalvm.version.full", graalVMVersion.getFullVersion());
-        graalVMInfoProps.put("graalvm.version.version", graalVMVersion.getVersion());
-        graalVMInfoProps.put("graalvm.version.javaVersion", "" + graalVMVersion.getJavaVersion());
-        graalVMInfoProps.put("graalvm.version.distribution", graalVMVersion.getDistribution());
-        return new ArtifactResultBuildItem(image.getPath(), PackageConfig.NATIVE, graalVMInfoProps);
+        return new ArtifactResultBuildItem(image.getPath(), PackageConfig.BuiltInType.NATIVE.getValue(),
+                graalVMVersion.toMap());
     }
 
     @BuildStep(onlyIf = NativeSourcesBuild.class)
@@ -911,8 +905,10 @@ public class NativeImageBuildStep {
 
                 if (nativeConfig.autoServiceLoaderRegistration()) {
                     addExperimentalVMOption(nativeImageArgs, "-H:+UseServiceLoaderFeature");
-                    //When enabling, at least print what exactly is being added:
-                    nativeImageArgs.add("-H:+TraceServiceLoaderFeature");
+                    if (graalVMVersion.compareTo(GraalVM.Version.VERSION_23_1_0) < 0) {
+                        // When enabling, at least print what exactly is being added. Only possible in <23.1.0
+                        nativeImageArgs.add("-H:+TraceServiceLoaderFeature");
+                    }
                 } else {
                     addExperimentalVMOption(nativeImageArgs, "-H:-UseServiceLoaderFeature");
                 }

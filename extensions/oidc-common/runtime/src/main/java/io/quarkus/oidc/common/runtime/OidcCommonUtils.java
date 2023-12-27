@@ -13,7 +13,9 @@ import java.security.Key;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,7 +32,9 @@ import io.quarkus.arc.Arc;
 import io.quarkus.arc.ArcContainer;
 import io.quarkus.credentials.CredentialsProvider;
 import io.quarkus.credentials.runtime.CredentialsProviderFinder;
-import io.quarkus.oidc.common.OidcClientRequestFilter;
+import io.quarkus.oidc.common.OidcEndpoint;
+import io.quarkus.oidc.common.OidcRequestContextProperties;
+import io.quarkus.oidc.common.OidcRequestFilter;
 import io.quarkus.oidc.common.runtime.OidcCommonConfig.Credentials;
 import io.quarkus.oidc.common.runtime.OidcCommonConfig.Credentials.Provider;
 import io.quarkus.oidc.common.runtime.OidcCommonConfig.Credentials.Secret;
@@ -137,7 +141,7 @@ public class OidcCommonUtils {
                         .setPassword(oidcConfig.tls.getTrustStorePassword().orElse("password"))
                         .setAlias(oidcConfig.tls.getTrustStoreCertAlias().orElse(null))
                         .setValue(io.vertx.core.buffer.Buffer.buffer(trustStoreData))
-                        .setType(getStoreType(oidcConfig.tls.trustStoreFileType, oidcConfig.tls.trustStoreFile.get()))
+                        .setType(getKeyStoreType(oidcConfig.tls.trustStoreFileType, oidcConfig.tls.trustStoreFile.get()))
                         .setProvider(oidcConfig.tls.trustStoreProvider.orElse(null));
                 options.setTrustOptions(trustStoreOptions);
                 if (Verification.CERTIFICATE_VALIDATION == oidcConfig.tls.verification.orElse(Verification.REQUIRED)) {
@@ -156,7 +160,7 @@ public class OidcCommonUtils {
                         .setAlias(oidcConfig.tls.keyStoreKeyAlias.orElse(null))
                         .setAliasPassword(oidcConfig.tls.keyStoreKeyPassword.orElse(null))
                         .setValue(io.vertx.core.buffer.Buffer.buffer(keyStoreData))
-                        .setType(getStoreType(oidcConfig.tls.keyStoreFileType, oidcConfig.tls.keyStoreFile.get()))
+                        .setType(getKeyStoreType(oidcConfig.tls.keyStoreFileType, oidcConfig.tls.keyStoreFile.get()))
                         .setProvider(oidcConfig.tls.keyStoreProvider.orElse(null));
 
                 if (oidcConfig.tls.keyStorePassword.isPresent()) {
@@ -184,7 +188,7 @@ public class OidcCommonUtils {
         options.setConnectTimeout((int) oidcConfig.getConnectionTimeout().toMillis());
     }
 
-    private static String getStoreType(Optional<String> fileType, Path storePath) {
+    public static String getKeyStoreType(Optional<String> fileType, Path storePath) {
         if (fileType.isPresent()) {
             return fileType.get().toUpperCase();
         }
@@ -427,12 +431,16 @@ public class OidcCommonUtils {
                 || (t instanceof OidcEndpointAccessException && ((OidcEndpointAccessException) t).getErrorStatus() == 404));
     }
 
-    public static Uni<JsonObject> discoverMetadata(WebClient client, List<OidcClientRequestFilter> filters,
+    public static Uni<JsonObject> discoverMetadata(WebClient client, Map<OidcEndpoint.Type, List<OidcRequestFilter>> filters,
             String authServerUrl, long connectionDelayInMillisecs) {
-        final String discoveryUrl = authServerUrl + OidcConstants.WELL_KNOWN_CONFIGURATION;
+        final String discoveryUrl = getDiscoveryUri(authServerUrl);
         HttpRequest<Buffer> request = client.getAbs(discoveryUrl);
-        for (OidcClientRequestFilter filter : filters) {
-            filter.filter(request, null);
+        if (!filters.isEmpty()) {
+            OidcRequestContextProperties requestProps = new OidcRequestContextProperties(
+                    Map.of(OidcRequestContextProperties.DISCOVERY_ENDPOINT, discoveryUrl));
+            for (OidcRequestFilter filter : getMatchingOidcRequestFilters(filters, OidcEndpoint.Type.DISCOVERY)) {
+                filter.filter(request, null, requestProps);
+            }
         }
         return request.send().onItem().transform(resp -> {
             if (resp.statusCode() == 200) {
@@ -450,6 +458,10 @@ public class OidcCommonUtils {
                     // don't wrap it to avoid information leak
                     return new RuntimeException("OIDC Server is not available");
                 });
+    }
+
+    public static String getDiscoveryUri(String authServerUrl) {
+        return authServerUrl + OidcConstants.WELL_KNOWN_CONFIGURATION;
     }
 
     private static byte[] getFileContent(Path path) throws IOException {
@@ -478,12 +490,38 @@ public class OidcCommonUtils {
         return out.toByteArray();
     }
 
-    public static List<OidcClientRequestFilter> getClientRequestCustomizer() {
+    public static Map<OidcEndpoint.Type, List<OidcRequestFilter>> getOidcRequestFilters() {
         ArcContainer container = Arc.container();
         if (container != null) {
-            return container.listAll(OidcClientRequestFilter.class).stream().map(handle -> handle.get())
-                    .collect(Collectors.toList());
+            Map<OidcEndpoint.Type, List<OidcRequestFilter>> map = new HashMap<>();
+            for (OidcRequestFilter filter : container.listAll(OidcRequestFilter.class).stream().map(handle -> handle.get())
+                    .collect(Collectors.toList())) {
+                OidcEndpoint endpoint = filter.getClass().getAnnotation(OidcEndpoint.class);
+                OidcEndpoint.Type type = endpoint != null ? endpoint.value() : OidcEndpoint.Type.ALL;
+                map.computeIfAbsent(type, k -> new ArrayList<OidcRequestFilter>()).add(filter);
+            }
+            return map;
         }
-        return List.of();
+        return Map.of();
+    }
+
+    public static List<OidcRequestFilter> getMatchingOidcRequestFilters(Map<OidcEndpoint.Type, List<OidcRequestFilter>> filters,
+            OidcEndpoint.Type type) {
+        List<OidcRequestFilter> typeSpecific = filters.get(type);
+        List<OidcRequestFilter> all = filters.get(OidcEndpoint.Type.ALL);
+        if (typeSpecific == null && all == null) {
+            return List.of();
+        }
+        if (typeSpecific != null && all == null) {
+            return typeSpecific;
+        } else if (typeSpecific == null && all != null) {
+            return all;
+        } else {
+            List<OidcRequestFilter> combined = new ArrayList<>(typeSpecific.size() + all.size());
+            combined.addAll(typeSpecific);
+            combined.addAll(all);
+            return combined;
+        }
+
     }
 }

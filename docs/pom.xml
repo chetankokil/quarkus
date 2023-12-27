@@ -29,7 +29,7 @@
         <roaster-jdt.version>2.26.0.Final</roaster-jdt.version>
         <maven-model-helper.version>21</maven-model-helper.version>
         <eclipse-collections.version>11.1.0</eclipse-collections.version>
-        <jgit.version>6.6.1.202309021850-r</jgit.version>
+        <jgit.version>6.8.0.202311291450-r</jgit.version>
 
         <quarkus-home-url>https://quarkus.io</quarkus-home-url>
         <quarkus-base-url>https://github.com/quarkusio/quarkus</quarkus-base-url>
@@ -39,8 +39,8 @@
         <vale.image>docker.io/jdkato/vale:v2.15.5</vale.image>
 
         <!-- Keep these in sync with the full versions in bom/application/pom.xml -->
-        <hibernate-orm.version-for-documentation>6.2</hibernate-orm.version-for-documentation>
-        <hibernate-search.version-for-documentation>6.2</hibernate-search.version-for-documentation>
+        <hibernate-orm.version-for-documentation>6.4</hibernate-orm.version-for-documentation>
+        <hibernate-search.version-for-documentation>7.0</hibernate-search.version-for-documentation>
     </properties>
 
     <name>Quarkus - Documentation</name>
@@ -206,6 +206,19 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-apicurio-registry-avro-deployment</artifactId>
+            <version>${project.version}</version>
+            <type>pom</type>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-apicurio-registry-json-schema-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>
@@ -388,19 +401,6 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-container-image-openshift-deployment</artifactId>
-            <version>${project.version}</version>
-            <type>pom</type>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>*</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-container-image-s2i-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>
@@ -855,7 +855,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-hibernate-search-orm-coordination-outbox-polling-deployment</artifactId>
+            <artifactId>quarkus-hibernate-search-orm-elasticsearch-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>
@@ -868,7 +868,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-hibernate-search-orm-elasticsearch-deployment</artifactId>
+            <artifactId>quarkus-hibernate-search-orm-outbox-polling-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>
@@ -934,19 +934,6 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jacoco-deployment</artifactId>
-            <version>${project.version}</version>
-            <type>pom</type>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>*</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-jaeger-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>
@@ -2520,19 +2507,6 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-openapi-deployment</artifactId>
-            <version>${project.version}</version>
-            <type>pom</type>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>*</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-smallrye-opentracing-deployment</artifactId>
             <version>${project.version}</version>
             <type>pom</type>
             <scope>test</scope>

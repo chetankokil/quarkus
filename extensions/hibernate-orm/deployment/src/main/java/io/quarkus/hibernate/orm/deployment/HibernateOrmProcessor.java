@@ -182,9 +182,9 @@ public final class HibernateOrmProcessor {
         producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.MSSQL,
                 "org.hibernate.dialect.SQLServerDialect", DialectVersions.Defaults.MSSQL));
         producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.MYSQL,
-                "org.hibernate.dialect.MySQLDialect", DialectVersions.Defaults.MYSQL));
+                "org.hibernate.dialect.MySQLDialect"));
         producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.ORACLE,
-                "org.hibernate.dialect.OracleDialect", DialectVersions.Defaults.ORACLE));
+                "org.hibernate.dialect.OracleDialect"));
         producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.POSTGRESQL,
                 "org.hibernate.dialect.PostgreSQLDialect"));
     }
@@ -326,7 +326,7 @@ public final class HibernateOrmProcessor {
                                     hibernateOrmConfig.database.ormCompatibilityVersion, Collections.emptyMap()),
                             null,
                             jpaModel.getXmlMappings(persistenceXmlDescriptorBuildItem.getDescriptor().getName()),
-                            false, true));
+                            false, true, capabilities));
         }
 
         if (impliedPU.shouldGenerateImpliedBlockingPersistenceUnit()) {
@@ -416,6 +416,7 @@ public final class HibernateOrmProcessor {
             JpaModelIndexBuildItem indexBuildItem,
             TransformedClassesBuildItem transformedClassesBuildItem,
             List<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptorBuildItems,
+            List<AdditionalJpaModelBuildItem> additionalJpaModelBuildItems,
             BuildProducer<GeneratedClassBuildItem> generatedClassBuildItemBuildProducer,
             LiveReloadBuildItem liveReloadBuildItem) {
         Set<String> managedClassAndPackageNames = new HashSet<>(jpaModel.getEntityClassNames());
@@ -426,6 +427,11 @@ public final class HibernateOrmProcessor {
             // is used for packages too, and it relies (indirectly) on getManagedClassNames().
             managedClassAndPackageNames.addAll(pud.getManagedClassNames());
         }
+
+        for (AdditionalJpaModelBuildItem additionalJpaModelBuildItem : additionalJpaModelBuildItems) {
+            managedClassAndPackageNames.add(additionalJpaModelBuildItem.getClassName());
+        }
+
         PreGeneratedProxies proxyDefinitions = generatedProxies(managedClassAndPackageNames,
                 indexBuildItem.getIndex(), transformedClassesBuildItem,
                 generatedClassBuildItemBuildProducer, liveReloadBuildItem);
@@ -1118,7 +1124,7 @@ public final class HibernateOrmProcessor {
                                 persistenceUnitConfig.unsupportedProperties),
                         persistenceUnitConfig.multitenantSchemaDatasource.orElse(null),
                         xmlMappings,
-                        false, false));
+                        false, false, capabilities));
     }
 
     private static void collectDialectConfig(String persistenceUnitName,

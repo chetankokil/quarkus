@@ -319,7 +319,8 @@ public class RestClientBuilderImpl implements RestClientBuilder {
 
         ArcContainer arcContainer = Arc.container();
         if (arcContainer == null) {
-            throw new IllegalStateException("The Reactive REST Client is not meant to be used outside of Quarkus");
+            throw new IllegalStateException(
+                    "The Reactive REST Client needs to be built within the context of a Quarkus application with a valid ArC (CDI) context running.");
         }
 
         RestClientListeners.get().forEach(listener -> listener.onNewClient(aClass, this));
@@ -385,6 +386,10 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         Integer maxChunkSize = (Integer) getConfiguration().getProperty(QuarkusRestClientProperties.MAX_CHUNK_SIZE);
         if (maxChunkSize != null) {
             clientBuilder.maxChunkSize(maxChunkSize);
+        } else if (restClientsConfig.maxChunkSize.isPresent()) {
+            clientBuilder.maxChunkSize((int) restClientsConfig.maxChunkSize.get().asLongValue());
+        } else if (restClientsConfig.multipart.maxChunkSize.isPresent()) {
+            clientBuilder.maxChunkSize(restClientsConfig.multipart.maxChunkSize.get());
         } else {
             clientBuilder.maxChunkSize(DEFAULT_MAX_CHUNK_SIZE);
         }

@@ -3,6 +3,7 @@ package io.quarkus.deployment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Objects;
 
 import org.eclipse.microprofile.config.Config;
 import org.wildfly.common.annotation.NotNull;
@@ -22,11 +23,27 @@ public interface CodeGenProvider {
 
     /**
      * File extension that CodeGenProvider will generate code from
+     * Deprecated: use inputExtensions instead
      *
      * @return file extension
      */
+    @Deprecated
+    default String inputExtension() {
+        return null;
+    }
+
+    /**
+     * File extensions that CodeGenProvider will generate code from
+     *
+     * @return file extensions
+     */
     @NotNull
-    String inputExtension();
+    default String[] inputExtensions() {
+        if (inputExtension() != null) {
+            return new String[] { inputExtension() };
+        }
+        return new String[] {};
+    }
 
     /**
      * Name of the directory containing input files for a given {@link CodeGenProvider} implementation
@@ -75,5 +92,15 @@ public interface CodeGenProvider {
 
     default boolean shouldRun(Path sourceDir, Config config) {
         return Files.isDirectory(sourceDir);
+    }
+
+    /**
+     * Resolve path; e.g. symlinks, etc
+     *
+     * @param path the path to resolve
+     * @return resolved path
+     */
+    static Path resolve(Path path) {
+        return Objects.requireNonNull(path).resolve(".");
     }
 }
