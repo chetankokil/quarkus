@@ -19,8 +19,8 @@
         <!-- Maven plugin versions -->
 
         <!-- These properties are needed in order for them to be resolvable by the generated projects -->
-        <compiler-plugin.version>3.11.0</compiler-plugin.version>
-        <kotlin.version>1.9.21</kotlin.version>
+        <compiler-plugin.version>3.12.1</compiler-plugin.version>
+        <kotlin.version>1.9.22</kotlin.version>
         <dokka.version>1.9.10</dokka.version>
         <scala.version>2.13.12</scala.version>
         <scala-maven-plugin.version>4.8.1</scala-maven-plugin.version>
@@ -28,7 +28,7 @@
         <scala-plugin.version>${scala-maven-plugin.version}</scala-plugin.version>
 
         <version.enforcer.plugin>3.2.1</version.enforcer.plugin>
-        <version.surefire.plugin>3.2.3</version.surefire.plugin>
+        <version.surefire.plugin>3.2.5</version.surefire.plugin>
         <version.exec.plugin>3.0.0</version.exec.plugin>
         <failsafe-plugin.version>${version.surefire.plugin}</failsafe-plugin.version>
 
@@ -36,9 +36,9 @@
         <jandex.version>3.1.6</jandex.version>
         <jandex-gradle-plugin.version>1.0.0</jandex-gradle-plugin.version>
 
-        <asciidoctorj.version>2.5.10</asciidoctorj.version>
+        <asciidoctorj.version>2.5.11</asciidoctorj.version>
         <htmlunit.version>2.70.0</htmlunit.version>
-        <javaparser-core.version>3.25.6</javaparser-core.version>
+        <javaparser-core.version>3.25.8</javaparser-core.version>
         <jdeparser.version>2.0.3.Final</jdeparser.version>
         <subethasmtp.version>6.0.1</subethasmtp.version>
 
@@ -64,7 +64,7 @@
         <!-- These 2 properties are used by CreateProjectMojo to add the Maven Wrapper -->
         <proposed-maven-version>3.9.6</proposed-maven-version>
         <maven-wrapper.version>3.2.0</maven-wrapper.version>
-        <gradle-wrapper.version>8.5</gradle-wrapper.version>
+        <gradle-wrapper.version>8.6</gradle-wrapper.version>
         <quarkus-gradle-plugin.version>${project.version}</quarkus-gradle-plugin.version>
         <quarkus-maven-plugin.version>${project.version}</quarkus-maven-plugin.version>
         <maven-plugin-plugin.version>3.8.1</maven-plugin-plugin.version>
@@ -72,8 +72,10 @@
         <!-- MicroProfile TCK versions used to be defined here but have moved to the concrete tck modules -->
 
         <!-- Panache needs to run the hibernate-jpamodelgen annotation processor,
-             and unfortunately annotation processors are not covered by dependency management -->
-        <hibernate-orm.version>6.4.0.Final</hibernate-orm.version>
+             and unfortunately annotation processors are not covered by dependency management
+             in kotlin-maven-plugin; see https://github.com/quarkusio/quarkus/issues/37477#issuecomment-1923662964
+         -->
+        <hibernate-orm.version>6.4.4.Final</hibernate-orm.version>
         <!-- Antlr 4 is used by the PanacheQL parser but also needs to match the requirements of Hibernate ORM 6.x-->
         <antlr.version>4.13.0</antlr.version>
 
@@ -81,19 +83,19 @@
         <volume.access.modifier>:Z</volume.access.modifier>
 
         <!-- Defaults for integration tests -->
-        <elasticsearch-server.version>8.9.1</elasticsearch-server.version>
+        <elasticsearch-server.version>8.12.1</elasticsearch-server.version>
         <elasticsearch.image>docker.io/elastic/elasticsearch:${elasticsearch-server.version}</elasticsearch.image>
         <logstash.image>docker.io/elastic/logstash:${elasticsearch-server.version}</logstash.image>
         <kibana.image>docker.io/elastic/kibana:${elasticsearch-server.version}</kibana.image>
         <elasticsearch.protocol>http</elasticsearch.protocol>
-        <opensearch-server.version>2.9.0</opensearch-server.version>
+        <opensearch-server.version>2.11.1</opensearch-server.version>
         <opensearch.image>docker.io/opensearchproject/opensearch:${opensearch-server.version}</opensearch.image>
         <opensearch.protocol>http</opensearch.protocol>
 
         <!-- Database images for JDBC/Reactive/Hibernate tests and devservices -->
         <postgres.image>docker.io/postgres:14</postgres.image>
         <mariadb.image>docker.io/mariadb:10.11</mariadb.image>
-        <db2.image>docker.io/ibmcom/db2:11.5.7.0a</db2.image>
+        <db2.image>icr.io/db2_community/db2:11.5.9.0</db2.image>
         <mssql.image>mcr.microsoft.com/mssql/server:2022-latest</mssql.image>
         <mysql.image>docker.io/mysql:8.0</mysql.image>
         <oracle.image>docker.io/gvenzl/oracle-free:23-slim-faststart</oracle.image>
@@ -104,26 +106,26 @@
 
         <!-- The image to use for tests that run Keycloak -->
         <!-- IMPORTANT: If this is changed you must also update bom/application/pom.xml and KeycloakBuildTimeConfig/DevServicesConfig in quarkus-oidc/deployment to match the version -->
-        <keycloak.version>23.0.1</keycloak.version>
+        <keycloak.version>23.0.6</keycloak.version>
         <keycloak.wildfly.version>19.0.3</keycloak.wildfly.version>
         <keycloak.docker.image>quay.io/keycloak/keycloak:${keycloak.version}</keycloak.docker.image>
         <keycloak.docker.legacy.image>quay.io/keycloak/keycloak:${keycloak.wildfly.version}-legacy</keycloak.docker.legacy.image>
 
         <unboundid-ldap.version>6.0.11</unboundid-ldap.version>
 
-        <assertj.version>3.24.2</assertj.version>
+        <assertj.version>3.25.3</assertj.version>
 
-        <wiremock.version>3.3.1</wiremock.version>
+        <wiremock.version>3.4.1</wiremock.version>
         <wiremock-maven-plugin.version>7.3.0</wiremock-maven-plugin.version>
 
         <!-- Artemis test dependencies -->
-        <artemis.version>2.31.2</artemis.version>
+        <artemis.version>2.32.0</artemis.version>
 
         <!-- Code Coverage Properties-->
         <jacoco.agent.argLine></jacoco.agent.argLine>
 
         <asciidoctor-maven-plugin.version>2.0.0</asciidoctor-maven-plugin.version>
-        <docker-maven-plugin.version>0.43.4</docker-maven-plugin.version>
+        <docker-maven-plugin.version>0.44.0</docker-maven-plugin.version>
         <formatter-maven-plugin.version>2.23.0</formatter-maven-plugin.version>
         <impsort-maven-plugin.version>1.9.0</impsort-maven-plugin.version>
         <maven-invoker-plugin.version>3.6.0</maven-invoker-plugin.version>
@@ -158,8 +160,6 @@
         <script.extension>sh</script.extension>
         <docker-prune.location>${maven.multiModuleProjectDirectory}/.github/docker-prune.${script.extension}</docker-prune.location>
 
-        <enforce-test-deps-scope.skip>${enforcer.skip}</enforce-test-deps-scope.skip>
-
         <surefire.argLine.additional></surefire.argLine.additional>
         <failsafe.argLine.additional>${surefire.argLine.additional}</failsafe.argLine.additional>
         <os-maven-plugin.version>1.7.0</os-maven-plugin.version>
@@ -172,26 +172,6 @@
         <!-- Quarkus Analytics -->
         <properties-maven-plugin.version>1.1.0</properties-maven-plugin.version>
         <quarkus.analytics.disabled>true</quarkus.analytics.disabled>
-
-        <!-- Dev UI -->
-        <vaadin.version>24.3.0</vaadin.version>
-        <lit.version>3.1.0</lit.version>
-        <lit-element.version>4.0.2</lit-element.version>
-        <lit-html.version>3.1.0</lit-html.version>
-        <ssr-dom-shim.version>1.1.2</ssr-dom-shim.version>
-        <trusted-types.version>2.0.7</trusted-types.version>
-        <reactive-element.version>2.0.2</reactive-element.version>
-        <vaadin-usage-statistics.version>2.1.2</vaadin-usage-statistics.version>
-        <vaadin-development-mode-detector.version>2.0.6</vaadin-development-mode-detector.version>
-        <polymer.version>3.5.1</polymer.version>
-        <shadycss.version>1.11.2</shadycss.version>
-        <dedupe-mixin.version>1.4.0</dedupe-mixin.version>
-        <vaadin-router.version>1.7.5</vaadin-router.version>
-        <lit-state.version>1.7.0</lit-state.version>
-        <echarts.version>5.4.3</echarts.version>
-        <wc-codemirror.version>2.1.0</wc-codemirror.version>
-        <es-module-shims.version>1.8.2</es-module-shims.version>
-        <path-to-regexp.version>2.4.0</path-to-regexp.version>
     </properties>
 
     <dependencyManagement>
@@ -391,229 +371,6 @@
                 </exclusions>
             </dependency>
 
-            <!-- Dev UI -->
-            <!-- Vaadin Router -->
-            <dependency>
-                <groupId>org.mvnpm.at.vaadin</groupId>
-                <artifactId>router</artifactId>
-                <version>${vaadin-router.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>path-to-regexp</artifactId>
-                <version>${path-to-regexp.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <!-- Vaadin Web components -->
-            <dependency>
-                <groupId>org.mvnpm.at.mvnpm</groupId>
-                <artifactId>vaadin-webcomponents</artifactId>
-                <version>${vaadin.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.vaadin</groupId>
-                <artifactId>vaadin-usage-statistics</artifactId>
-                <version>${vaadin-usage-statistics.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.vaadin</groupId>
-                <artifactId>vaadin-development-mode-detector</artifactId>
-                <version>${vaadin-development-mode-detector.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.polymer</groupId>
-                <artifactId>polymer</artifactId>
-                <version>${polymer.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.webcomponents</groupId>
-                <artifactId>shadycss</artifactId>
-                <version>${shadycss.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.open-wc</groupId>
-                <artifactId>dedupe-mixin</artifactId>
-                <version>${dedupe-mixin.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-
-            <!-- Lit -->
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>lit</artifactId>
-                <version>${lit.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.lit</groupId>
-                <artifactId>reactive-element</artifactId>
-                <version>${reactive-element.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>lit-element</artifactId>
-                <version>${lit-element.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>lit-html</artifactId>
-                <version>${lit-html.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.lit-labs</groupId>
-                <artifactId>ssr-dom-shim</artifactId>
-                <version>${ssr-dom-shim.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm.at.types</groupId>
-                <artifactId>trusted-types</artifactId>
-                <version>${trusted-types.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>lit-element-state</artifactId>
-                <version>${lit-state.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-
-            <!-- Apache echarts -->
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>echarts</artifactId>
-                <version>${echarts.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-
-            <!-- hpcc-js Wasm / Graphviz and dependencies -->
-            <dependency>
-                <groupId>org.mvnpm.at.hpcc-js</groupId>
-                <artifactId>wasm</artifactId>
-                <version>2.14.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>yargs</artifactId>
-                <version>17.7.2</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>cliui</artifactId>
-                <version>8.0.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>escalade</artifactId>
-                <version>3.1.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>get-caller-file</artifactId>
-                <version>2.0.5</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>require-directory</artifactId>
-                <version>2.1.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>string-width</artifactId>
-                <version>4.2.3</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>y18n</artifactId>
-                <version>5.0.8</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>yargs-parser</artifactId>
-                <version>21.1.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>strip-ansi</artifactId>
-                <version>6.0.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>wrap-ansi</artifactId>
-                <version>7.0.0</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>emoji-regex</artifactId>
-                <version>8.0.0</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>is-fullwidth-code-point</artifactId>
-                <version>3.0.0</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>ansi-regex</artifactId>
-                <version>5.0.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>ansi-styles</artifactId>
-                <version>4.3.0</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>color-convert</artifactId>
-                <version>2.0.1</version>
-                <scope>runtime</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>color-name</artifactId>
-                <version>1.1.4</version>
-                <scope>runtime</scope>
-            </dependency>
-
-            <!-- Code editor -->
-            <dependency>
-                <groupId>org.mvnpm.at.vanillawc</groupId>
-                <artifactId>wc-codemirror</artifactId>
-                <version>${wc-codemirror.version}</version>
-                <scope>runtime</scope>
-            </dependency>
-
-            <!-- Polyfill for importmaps -->
-            <dependency>
-                <groupId>org.mvnpm</groupId>
-                <artifactId>es-module-shims</artifactId>
-                <version>${es-module-shims.version}</version>
-                <scope>runtime</scope>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -743,62 +500,15 @@
                                 <rules>
                                     <dependencyConvergence/>
                                     <externalRules>
-                                        <location>classpath:enforcer-rules/quarkus-require-java-version.xml</location>
-                                    </externalRules>
-                                    <externalRules>
-                                        <location>classpath:enforcer-rules/quarkus-require-maven-version.xml</location>
-                                    </externalRules>
-                                    <externalRules>
                                         <location>classpath:enforcer-rules/quarkus-banned-dependencies.xml</location>
                                     </externalRules>
+                                    <externalRules>
+                                        <location>classpath:enforcer-rules/quarkus-banned-dependencies-okhttp.xml</location>
+                                    </externalRules>
+                                    <externalRules>
+                                        <location>classpath:enforcer-rules/quarkus-banned-dependencies-test.xml</location>
+                                    </externalRules>
                                 </rules>
-                            </configuration>
-                            <goals>
-                                <goal>enforce</goal>
-                            </goals>
-                        </execution>
-                        <execution>
-                            <id>enforce-test-deps-scope</id>
-                            <configuration>
-                                <rules>
-                                    <bannedDependencies>
-                                        <excludes>
-                                            <exclude>io.quarkus:quarkus-test-*</exclude>
-                                            <exclude>io.rest-assured:*</exclude>
-                                            <exclude>org.assertj:*</exclude>
-                                            <exclude>junit:junit</exclude>
-                                        </excludes>
-                                        <includes>
-                                            <include>io.quarkus:quarkus-test-*:*:*:test</include>
-                                            <include>io.rest-assured:*:*:*:test</include>
-                                            <include>org.assertj:*:*:*:test</include>
-                                            <include>junit:junit:*:*:test</include>
-                                        </includes>
-                                        <message>Found test dependencies with wrong scope:</message>
-                                    </bannedDependencies>
-                                </rules>
-                                <skip>${enforce-test-deps-scope.skip}</skip>
-                            </configuration>
-                            <goals>
-                                <goal>enforce</goal>
-                            </goals>
-                        </execution>
-                        <execution>
-                            <id>enforce-test-deps-junit-scope</id>
-                            <configuration>
-                                <rules>
-                                    <bannedDependencies>
-                                        <searchTransitive>false</searchTransitive>
-                                        <excludes>
-                                            <exclude>org.junit.jupiter:*</exclude>
-                                        </excludes>
-                                        <includes>
-                                            <include>org.junit.jupiter:*:*:*:test</include>
-                                        </includes>
-                                        <message>Found JUnit dependencies with wrong scope:</message>
-                                    </bannedDependencies>
-                                </rules>
-                                <skip>${enforce-test-deps-scope.skip}</skip>
                             </configuration>
                             <goals>
                                 <goal>enforce</goal>
@@ -914,7 +624,7 @@
                         <dependency>
                             <groupId>org.apache.groovy</groupId>
                             <artifactId>groovy</artifactId>
-                            <version>4.0.17</version>
+                            <version>4.0.18</version>
                         </dependency>
                     </dependencies>
                 </plugin>
@@ -950,7 +660,6 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-plugin-plugin</artifactId>
-                    <version>${maven-plugin-plugin.version}</version>
                     <configuration>
                         <skipErrorNoDescriptorsFound>true</skipErrorNoDescriptorsFound>
                     </configuration>

@@ -181,29 +181,6 @@ public class DevServicesElasticsearchProcessor {
 
         Distribution resolvedDistribution = resolveDistribution(config, buildItemConfig);
         DockerImageName resolvedImageName = resolveImageName(config, resolvedDistribution);
-        // Hibernate Search Elasticsearch have a version configuration property, we need to check that it is coherent
-        // with the image we are about to launch
-        if (buildItemConfig.version != null) {
-            String containerTag = resolvedImageName.getVersionPart();
-            if (!containerTag.startsWith(buildItemConfig.version)) {
-                throw new BuildException(
-                        "Dev Services for Elasticsearch detected a version mismatch."
-                                + " Consuming extensions are configured to use version " + config.imageName
-                                + " but Dev Services are configured to use version " + buildItemConfig.version +
-                                ". Either configure the same version or disable Dev Services for Elasticsearch.",
-                        Collections.emptyList());
-            }
-        }
-
-        if (buildItemConfig.distribution != null
-                && !buildItemConfig.distribution.equals(resolvedDistribution)) {
-            throw new BuildException(
-                    "Dev Services for Elasticsearch detected a distribution mismatch."
-                            + " Consuming extensions are configured to use distribution " + config.distribution
-                            + " but Dev Services are configured to use distribution " + buildItemConfig.distribution +
-                            ". Either configure the same distribution or disable Dev Services for Elasticsearch.",
-                    Collections.emptyList());
-        }
 
         final Optional<ContainerAddress> maybeContainerAddress = elasticsearchContainerLocator.locateContainer(
                 config.serviceName,
@@ -214,8 +191,8 @@ public class DevServicesElasticsearchProcessor {
         final Supplier<DevServicesResultBuildItem.RunningDevService> defaultElasticsearchSupplier = () -> {
 
             GenericContainer<?> container = resolvedDistribution.equals(Distribution.ELASTIC)
-                    ? createElasticsearchContainer(config, resolvedImageName)
-                    : createOpensearchContainer(config, resolvedImageName);
+                    ? createElasticsearchContainer(config, resolvedImageName, useSharedNetwork)
+                    : createOpensearchContainer(config, resolvedImageName, useSharedNetwork);
 
             if (config.serviceName != null) {
                 container.withLabel(DEV_SERVICE_LABEL, config.serviceName);
@@ -247,27 +224,31 @@ public class DevServicesElasticsearchProcessor {
     }
 
     private GenericContainer<?> createElasticsearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
-            DockerImageName resolvedImageName) {
+            DockerImageName resolvedImageName, boolean useSharedNetwork) {
         ElasticsearchContainer container = new ElasticsearchContainer(
                 resolvedImageName.asCompatibleSubstituteFor("docker.elastic.co/elasticsearch/elasticsearch"));
-        ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_ELASTICSEARCH);
+        if (useSharedNetwork) {
+            ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_ELASTICSEARCH);
+        }
 
         // Disable security as else we would need to configure it correctly to avoid tons of WARNING in the log
         container.addEnv("xpack.security.enabled", "false");
         // Disable disk-based shard allocation thresholds:
         // in a single-node setup they just don't make sense,
         // and lead to problems on large disks with little space left.
-        // See https://www.elastic.co/guide/en/elasticsearch/reference/8.9/modules-cluster.html#disk-based-shard-allocation
+        // See https://www.elastic.co/guide/en/elasticsearch/reference/8.12/modules-cluster.html#disk-based-shard-allocation
         container.addEnv("cluster.routing.allocation.disk.threshold_enabled", "false");
         container.addEnv("ES_JAVA_OPTS", config.javaOpts);
         return container;
     }
 
     private GenericContainer<?> createOpensearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
-            DockerImageName resolvedImageName) {
+            DockerImageName resolvedImageName, boolean useSharedNetwork) {
         OpensearchContainer container = new OpensearchContainer(
                 resolvedImageName.asCompatibleSubstituteFor("opensearchproject/opensearch"));
-        ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_OPENSEARCH);
+        if (useSharedNetwork) {
+            ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_OPENSEARCH);
+        }
 
         container.addEnv("bootstrap.memory_lock", "true");
         container.addEnv("plugins.index_state_management.enabled", "false");

@@ -7,6 +7,7 @@ import static io.quarkus.kubernetes.deployment.Constants.HTTP_PORT;
 import static io.quarkus.kubernetes.deployment.Constants.KNATIVE;
 import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_BUILD_TIMESTAMP;
 import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_COMMIT_ID;
+import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_QUARKUS_VERSION;
 import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_VCS_URL;
 import static io.quarkus.kubernetes.deployment.Constants.SERVICE_ACCOUNT;
 
@@ -74,6 +75,7 @@ import io.dekorate.project.FileProjectFactory;
 import io.dekorate.project.Project;
 import io.dekorate.project.ScmInfo;
 import io.dekorate.utils.Annotations;
+import io.dekorate.utils.Git;
 import io.dekorate.utils.Labels;
 import io.dekorate.utils.Strings;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
@@ -81,6 +83,7 @@ import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.rbac.PolicyRule;
 import io.fabric8.kubernetes.api.model.rbac.PolicyRuleBuilder;
+import io.quarkus.builder.Version;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
@@ -977,6 +980,8 @@ public class KubernetesCommonHelper {
             result.add(new DecoratorBuildItem(target, new RemoveAnnotationDecorator(Annotations.VCS_URL)));
             result.add(new DecoratorBuildItem(target, new RemoveAnnotationDecorator(Annotations.COMMIT_ID)));
 
+            result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
+                    new Annotation(QUARKUS_ANNOTATIONS_QUARKUS_VERSION, Version.getVersion(), new String[0]))));
             //Add quarkus vcs annotations
             if (commitId != null && !config.isIdempotent()) {
                 result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
@@ -985,7 +990,7 @@ public class KubernetesCommonHelper {
             if (vcsUrl != null) {
                 result.add(new DecoratorBuildItem(target,
                         new AddAnnotationDecorator(name,
-                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUrl, new String[0]))));
+                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, Git.sanitizeRemoteUrl(vcsUrl), new String[0]))));
             }
 
         });

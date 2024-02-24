@@ -11,6 +11,7 @@ import java.util.Map;
 import org.eclipse.microprofile.config.spi.ConfigSource;
 import org.jboss.logging.Logger;
 
+import io.quarkus.arc.runtime.appcds.AppCDSRecorder;
 import io.quarkus.spring.cloud.config.client.runtime.Response.PropertySource;
 import io.smallrye.config.ConfigSourceContext;
 import io.smallrye.config.ConfigSourceFactory.ConfigurableConfigSourceFactory;
@@ -24,6 +25,12 @@ public class SpringCloudConfigClientConfigSourceFactory
     @Override
     public Iterable<ConfigSource> getConfigSources(final ConfigSourceContext context,
             final SpringCloudConfigClientConfig config) {
+        boolean inAppCDsGeneration = Boolean
+                .parseBoolean(System.getProperty(AppCDSRecorder.QUARKUS_APPCDS_GENERATE_PROP, "false"));
+        if (inAppCDsGeneration) {
+            return Collections.emptyList();
+        }
+
         List<ConfigSource> sources = new ArrayList<>();
 
         if (!config.enabled()) {
@@ -46,7 +53,9 @@ public class SpringCloudConfigClientConfigSourceFactory
         VertxSpringCloudConfigGateway client = new VertxSpringCloudConfigGateway(config);
         try {
             List<Response> responses = new ArrayList<>();
-            for (String profile : determineProfiles(context, config)) {
+            List<String> profiles = determineProfiles(context, config);
+            log.debug("The following profiles will be used to look up properties: " + profiles);
+            for (String profile : profiles) {
                 Response response;
                 if (connectionTimeoutIsGreaterThanZero || readTimeoutIsGreaterThanZero) {
                     response = client.exchange(applicationName.getValue(), profile).await()
@@ -57,8 +66,12 @@ public class SpringCloudConfigClientConfigSourceFactory
 
                 if (response.getProfiles().contains(profile)) {
                     responses.add(response);
+                } else {
+                    log.debug("Response did not contain profile " + profile);
                 }
             }
+
+            log.debug("Obtained " + responses.size() + " from the config server");
 
             int ordinal = 450;
             // Profiles are looked from the highest ordinal to lowest, so we reverse the collection to build the source list
@@ -69,7 +82,14 @@ public class SpringCloudConfigClientConfigSourceFactory
                 Collections.reverse(propertySources);
 
                 for (PropertySource propertySource : propertySources) {
-                    sources.add(SpringCloudPropertySource.from(propertySource, response.getProfiles(), ordinal++));
+                    int ord = ordinal++;
+                    if (log.isDebugEnabled()) {
+                        log.debug("Adding PropertySource named '" + propertySource.getName() + "', with and ordinal of '" + ord
+                                + "' that contains the following keys: "
+                                + String.join(",", propertySource.getSource().keySet()));
+                    }
+
+                    sources.add(SpringCloudPropertySource.from(propertySource, response.getProfiles(), ord));
                 }
             }
 

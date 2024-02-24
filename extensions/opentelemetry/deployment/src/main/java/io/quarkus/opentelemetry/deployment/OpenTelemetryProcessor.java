@@ -2,6 +2,7 @@ package io.quarkus.opentelemetry.deployment;
 
 import static io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem.SPI_ROOT;
 import static io.quarkus.opentelemetry.runtime.OpenTelemetryRecorder.OPEN_TELEMETRY_DRIVER;
+import static io.quarkus.opentelemetry.runtime.OpenTelemetryUtil.*;
 import static java.util.stream.Collectors.toList;
 
 import java.io.IOException;
@@ -28,7 +29,6 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.exporter.otlp.internal.OtlpSpanExporterProvider;
 import io.opentelemetry.instrumentation.annotations.AddingSpanAttributes;
-import io.opentelemetry.instrumentation.annotations.SpanAttribute;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import io.opentelemetry.sdk.autoconfigure.spi.AutoConfigurationCustomizerProvider;
 import io.opentelemetry.sdk.autoconfigure.spi.ConfigurablePropagatorProvider;
@@ -47,6 +47,8 @@ import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.InterceptorBindingRegistrar;
 import io.quarkus.arc.processor.Transformation;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
@@ -92,7 +94,8 @@ public class OpenTelemetryProcessor {
     private static final DotName WITH_SPAN_INTERCEPTOR = DotName.createSimple(WithSpanInterceptor.class.getName());
     private static final DotName ADD_SPAN_ATTRIBUTES_INTERCEPTOR = DotName
             .createSimple(AddingSpanAttributesInterceptor.class.getName());
-    private static final DotName SPAN_ATTRIBUTE = DotName.createSimple(SpanAttribute.class.getName());
+    private static final String QUARKUS_OTEL_SEMCONV_STABILITY_OPT_IN = "quarkus.otel.semconv-stability.opt-in";
+    private static final String OTEL_SEMCONV_STABILITY_OPT_IN = "otel.semconv-stability.opt-in";
 
     @BuildStep
     AdditionalBeanBuildItem ensureProducerIsRetained() {
@@ -109,6 +112,15 @@ public class OpenTelemetryProcessor {
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     SyntheticBeanBuildItem openTelemetryBean(OpenTelemetryRecorder recorder, OTelRuntimeConfig oTelRuntimeConfig) {
+
+        final String semconvStability = ConfigProvider.getConfig()
+                .getConfigValue(QUARKUS_OTEL_SEMCONV_STABILITY_OPT_IN)
+                .getValue();
+        if (semconvStability != null && !semconvStability.isEmpty()) {
+            // yes, they ignore config supplier on this.
+            System.setProperty(OTEL_SEMCONV_STABILITY_OPT_IN, semconvStability);
+        }
+
         return SyntheticBeanBuildItem.configure(OpenTelemetry.class)
                 .defaultBean()
                 .setRuntimeInit()
@@ -263,10 +275,18 @@ public class OpenTelemetryProcessor {
 
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
-    void setupVertx(InstrumentationRecorder recorder,
-            BeanContainerBuildItem beanContainerBuildItem) {
-
-        recorder.setupVertxTracer(beanContainerBuildItem.getValue());
+    void setupVertx(InstrumentationRecorder recorder, BeanContainerBuildItem beanContainerBuildItem,
+            Capabilities capabilities) {
+        boolean sqlClientAvailable = capabilities.isPresent(Capability.REACTIVE_DB2_CLIENT)
+                || capabilities.isPresent(Capability.REACTIVE_MSSQL_CLIENT)
+                || capabilities.isPresent(Capability.REACTIVE_MYSQL_CLIENT)
+                || capabilities.isPresent(Capability.REACTIVE_ORACLE_CLIENT)
+                || capabilities.isPresent(Capability.REACTIVE_PG_CLIENT);
+        recorder.setupVertxTracer(beanContainerBuildItem.getValue(),
+                sqlClientAvailable,
+                ConfigProvider.getConfig()
+                        .getConfigValue(QUARKUS_OTEL_SEMCONV_STABILITY_OPT_IN)
+                        .getValue());
     }
 
     @BuildStep

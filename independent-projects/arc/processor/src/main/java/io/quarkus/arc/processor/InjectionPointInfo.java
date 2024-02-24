@@ -100,7 +100,7 @@ public class InjectionPointInfo {
             }
             Type type = resolveType(paramType, beanClass, method.declaringClass(), beanDeployment);
             injectionPoints.add(new InjectionPointInfo(type,
-                    transformer.applyTransformers(type, method, paramQualifiers),
+                    transformer.applyTransformers(type, method, position, paramQualifiers),
                     method, position, contains(paramAnnotations, DotNames.TRANSIENT_REFERENCE),
                     contains(paramAnnotations, DotNames.DELEGATE)));
         }
@@ -292,11 +292,11 @@ public class InjectionPointInfo {
                 }
                 String method = target.asMethod().name();
                 if (method.equals(Methods.INIT)) {
-                    method = "";
+                    method = " constructor";
                 } else {
-                    method = "#" + method;
+                    method = "#" + method + "()";
                 }
-                return target.asMethod().declaringClass().name() + method + "()" + ":" + param;
+                return "parameter '" + param + "' of " + target.asMethod().declaringClass().name() + method;
             default:
                 return target.toString();
         }

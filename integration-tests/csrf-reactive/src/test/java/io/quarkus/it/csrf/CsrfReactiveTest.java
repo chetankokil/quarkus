@@ -4,6 +4,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URL;
@@ -56,6 +57,8 @@ public class CsrfReactiveTest {
             assertNotNull(htmlPage.getWebResponse().getResponseHeaderValue("Set-Cookie"));
             assertEquals("alice:true:tokenHeaderIsSet=false", textPage.getContent());
 
+            Cookie cookie1 = webClient.getCookieManager().getCookie("csrftoken");
+
             // This request which returns String is not CSRF protected
             textPage = webClient.getPage("http://localhost:8081/service/hello");
             assertEquals("hello", textPage.getContent());
@@ -66,6 +69,11 @@ public class CsrfReactiveTest {
             textPage = loginForm.getInputByName("submit").click();
             assertNotNull(htmlPage.getWebResponse().getResponseHeaderValue("Set-Cookie"));
             assertEquals("alice:true:tokenHeaderIsSet=false", textPage.getContent());
+
+            Cookie cookie2 = webClient.getCookieManager().getCookie("csrftoken");
+
+            assertEquals(cookie1.getValue(), cookie2.getValue());
+            assertTrue(cookie1.getExpires().before(cookie2.getExpires()));
 
             webClient.getCookieManager().clearCookies();
         }
@@ -341,6 +349,31 @@ public class CsrfReactiveTest {
         }
     }
 
+    @Test
+    public void testGetWithCsrfToken() throws Exception {
+        try (final WebClient webClient = createWebClient()) {
+
+            assertNull(webClient.getCookieManager().getCookie("csrftoken"));
+
+            TextPage htmlPage = webClient.getPage("http://localhost:8081/service/token");
+
+            assertNotNull(webClient.getCookieManager().getCookie("csrftoken"));
+
+            // Can't check that it matches the cookie because it's signed
+            assertNotNull(htmlPage.getContent());
+
+            // get it again
+            htmlPage = webClient.getPage("http://localhost:8081/service/token");
+
+            assertNotNull(webClient.getCookieManager().getCookie("csrftoken"));
+
+            // Can't check that it matches the cookie because it's signed
+            assertNotNull(htmlPage.getContent());
+
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
     private WebClient createWebClient() {
         WebClient webClient = new WebClient();
         webClient.setCssErrorHandler(new SilentCssErrorHandler());
@@ -365,6 +398,12 @@ public class CsrfReactiveTest {
         assertEquals(expectedStatus, result.result().statusCode(), path);
         if (responseBody != null) {
             assertEquals(responseBody, result.result().bodyAsString(), path);
+        }
+        if (expectedStatus != 400) {
+            String[] nextCookie = result.result().cookies().get(0).split(";");
+            String[] cookieNameValue = nextCookie[0].trim().split("=");
+            assertEquals(csrfCookie.getName(), cookieNameValue[0]);
+            assertEquals(csrfCookie.getValue(), cookieNameValue[1]);
         }
     }
 

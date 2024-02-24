@@ -9,6 +9,7 @@ import static io.quarkus.smallrye.reactivemessaging.deployment.ReactiveMessaging
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -80,9 +81,9 @@ import io.quarkus.smallrye.reactivemessaging.runtime.devmode.DevModeSupportConne
 import io.smallrye.reactive.messaging.EmitterConfiguration;
 import io.smallrye.reactive.messaging.Invoker;
 import io.smallrye.reactive.messaging.annotations.Blocking;
-import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingLivenessCheck;
-import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingReadinessCheck;
-import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingStartupCheck;
+import io.smallrye.reactive.messaging.extension.health.SmallRyeReactiveMessagingLivenessCheck;
+import io.smallrye.reactive.messaging.extension.health.SmallRyeReactiveMessagingReadinessCheck;
+import io.smallrye.reactive.messaging.extension.health.SmallRyeReactiveMessagingStartupCheck;
 import io.smallrye.reactive.messaging.providers.extension.ChannelConfiguration;
 
 public class SmallRyeReactiveMessagingProcessor {
@@ -205,6 +206,12 @@ public class SmallRyeReactiveMessagingProcessor {
     }
 
     @BuildStep
+    public void disableObservation(BuildProducer<RunTimeConfigurationDefaultBuildItem> runtimeConfigProducer) {
+        runtimeConfigProducer.produce(
+                new RunTimeConfigurationDefaultBuildItem("smallrye.messaging.observation.enabled", "false"));
+    }
+
+    @BuildStep
     public void enableHealth(ReactiveMessagingBuildTimeConfig buildTimeConfig,
             BuildProducer<HealthBuildItem> producer) {
         producer.produce(
@@ -234,7 +241,7 @@ public class SmallRyeReactiveMessagingProcessor {
 
         List<QuarkusMediatorConfiguration> mediatorConfigurations = new ArrayList<>(mediatorMethods.size());
         List<WorkerConfiguration> workerConfigurations = new ArrayList<>();
-        List<EmitterConfiguration> emittersConfigurations = new ArrayList<>();
+        Map<String, EmitterConfiguration> emittersConfigurations = new HashMap<>();
         List<ChannelConfiguration> channelConfigurations = new ArrayList<>();
 
         /*
@@ -293,15 +300,23 @@ public class SmallRyeReactiveMessagingProcessor {
         }
 
         for (InjectedEmitterBuildItem it : emitterFields) {
-            emittersConfigurations.add(it.getEmitterConfig());
+            EmitterConfiguration configuration = it.getEmitterConfig();
+            String channel = configuration.name();
+            EmitterConfiguration previousConfig = emittersConfigurations.get(channel);
+            if (previousConfig != null && !previousConfig.equals(configuration)) {
+                throw new DeploymentException(
+                        String.format("Emitter configuration for channel `%s` is different than previous configuration : %s",
+                                channel, it.getEmitterConfig()));
+            }
+            emittersConfigurations.put(channel, configuration);
         }
         for (InjectedChannelBuildItem it : channelFields) {
             channelConfigurations.add(it.getChannelConfig());
         }
 
         syntheticBeans.produce(SyntheticBeanBuildItem.configure(SmallRyeReactiveMessagingContext.class)
-                .supplier(recorder.createContext(mediatorConfigurations, workerConfigurations, emittersConfigurations,
-                        channelConfigurations))
+                .supplier(recorder.createContext(mediatorConfigurations, workerConfigurations,
+                        new ArrayList<>(emittersConfigurations.values()), channelConfigurations))
                 .done());
     }
 

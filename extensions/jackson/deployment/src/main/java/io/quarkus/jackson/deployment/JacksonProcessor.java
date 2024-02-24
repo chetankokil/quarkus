@@ -25,6 +25,7 @@ import org.jboss.jandex.IndexView;
 import org.jboss.jandex.Type;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.SimpleObjectIdResolver;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
@@ -67,6 +68,7 @@ import io.quarkus.jackson.runtime.JacksonSupport;
 import io.quarkus.jackson.runtime.JacksonSupportRecorder;
 import io.quarkus.jackson.runtime.MixinsRecorder;
 import io.quarkus.jackson.runtime.ObjectMapperProducer;
+import io.quarkus.jackson.runtime.VertxHybridPoolObjectMapperCustomizer;
 import io.quarkus.jackson.spi.ClassPathJacksonModuleBuildItem;
 import io.quarkus.jackson.spi.JacksonModuleBuildItem;
 
@@ -79,7 +81,7 @@ public class JacksonProcessor {
     private static final DotName JSON_AUTO_DETECT = DotName.createSimple(JsonAutoDetect.class.getName());
 
     private static final DotName JSON_TYPE_ID_RESOLVER = DotName.createSimple(JsonTypeIdResolver.class.getName());
-
+    private static final DotName JSON_SUBTYPES = DotName.createSimple(JsonSubTypes.class.getName());
     private static final DotName JSON_CREATOR = DotName.createSimple("com.fasterxml.jackson.annotation.JsonCreator");
 
     private static final DotName JSON_NAMING = DotName.createSimple("com.fasterxml.jackson.databind.annotation.JsonNaming");
@@ -98,6 +100,7 @@ public class JacksonProcessor {
     // this list can probably be enriched with more modules
     private static final List<String> MODULES_NAMES_TO_AUTO_REGISTER = Arrays.asList(TIME_MODULE, JDK8_MODULE,
             PARAMETER_NAMES_MODULE);
+    private static final String[] EMPTY_STRING = new String[0];
 
     @Inject
     CombinedIndexBuildItem combinedIndexBuildItem;
@@ -106,9 +109,11 @@ public class JacksonProcessor {
     List<IgnoreJsonDeserializeClassBuildItem> ignoreJsonDeserializeClassBuildItems;
 
     @BuildStep
-    void unremovable(Capabilities capabilities, BuildProducer<UnremovableBeanBuildItem> producer) {
+    void unremovable(Capabilities capabilities, BuildProducer<UnremovableBeanBuildItem> producer,
+            BuildProducer<AdditionalBeanBuildItem> additionalProducer) {
         if (capabilities.isPresent(Capability.VERTX_CORE)) {
             producer.produce(UnremovableBeanBuildItem.beanTypes(ObjectMapper.class));
+            additionalProducer.produce(AdditionalBeanBuildItem.unremovableOf(VertxHybridPoolObjectMapperCustomizer.class));
         }
     }
 
@@ -125,8 +130,13 @@ public class JacksonProcessor {
                         "com.fasterxml.jackson.databind.deser.std.DateDeserializers$SqlDateDeserializer",
                         "com.fasterxml.jackson.databind.deser.std.DateDeserializers$TimestampDeserializer",
                         "com.fasterxml.jackson.annotation.SimpleObjectIdResolver").methods().build());
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder("com.fasterxml.jackson.databind.ser.std.ClassSerializer")
-                .constructors().build());
+        reflectiveClass.produce(
+                ReflectiveClassBuildItem.builder(
+                        "com.fasterxml.jackson.databind.ser.std.ClassSerializer",
+                        "com.fasterxml.jackson.databind.ext.CoreXMLSerializers",
+                        "com.fasterxml.jackson.databind.ext.CoreXMLDeserializers")
+                        .constructors()
+                        .build());
 
         if (curateOutcomeBuildItem.getApplicationModel().getDependencies().stream().anyMatch(
                 x -> x.getGroupId().equals("com.fasterxml.jackson.module")
@@ -264,6 +274,25 @@ public class JacksonProcessor {
                 reflectiveClass.produce(
                         ReflectiveClassBuildItem.builder(SimpleObjectIdResolver.class).methods().fields().build());
             }
+        }
+
+        // register @JsonSubTypes.Type values for reflection
+        Set<String> subTypeTypesNames = new HashSet<>();
+        for (AnnotationInstance subTypeInstance : index.getAnnotations(JSON_SUBTYPES)) {
+            AnnotationValue subTypeValue = subTypeInstance.value();
+            if (subTypeValue != null) {
+                for (AnnotationInstance subTypeTypeInstance : subTypeValue.asNestedArray()) {
+                    AnnotationValue subTypeTypeValue = subTypeTypeInstance.value();
+                    if (subTypeTypeValue != null) {
+                        subTypeTypesNames.add(subTypeTypeValue.asClass().name().toString());
+                    }
+                }
+
+            }
+        }
+        if (!subTypeTypesNames.isEmpty()) {
+            reflectiveClass.produce(ReflectiveClassBuildItem.builder(subTypeTypesNames.toArray(EMPTY_STRING))
+                    .methods().fields().build());
         }
 
         // this needs to be registered manually since the runtime module is not indexed by Jandex

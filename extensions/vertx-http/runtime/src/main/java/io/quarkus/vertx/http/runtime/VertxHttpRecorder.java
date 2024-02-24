@@ -60,12 +60,26 @@ import io.quarkus.vertx.http.runtime.management.ManagementInterfaceBuildTimeConf
 import io.quarkus.vertx.http.runtime.management.ManagementInterfaceConfiguration;
 import io.quarkus.vertx.http.runtime.options.HttpServerCommonHandlers;
 import io.quarkus.vertx.http.runtime.options.HttpServerOptionsUtils;
+import io.quarkus.vertx.http.runtime.options.TlsCertificateReloader;
 import io.smallrye.common.vertx.VertxContext;
-import io.vertx.core.*;
-import io.vertx.core.http.*;
+import io.vertx.core.AbstractVerticle;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Context;
+import io.vertx.core.DeploymentOptions;
+import io.vertx.core.Handler;
+import io.vertx.core.Promise;
+import io.vertx.core.Verticle;
+import io.vertx.core.Vertx;
+import io.vertx.core.http.Cookie;
+import io.vertx.core.http.CookieSameSite;
+import io.vertx.core.http.HttpConnection;
+import io.vertx.core.http.HttpHeaders;
+import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.impl.Http1xServerConnection;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.impl.EventLoopContext;
 import io.vertx.core.impl.Utils;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.net.SocketAddress;
@@ -156,6 +170,8 @@ public class VertxHttpRecorder {
     private static HttpServerOptions httpMainServerOptions;
     private static HttpServerOptions httpMainDomainSocketOptions;
     private static HttpServerOptions httpManagementServerOptions;
+
+    private static final List<Long> refresTaskIds = new CopyOnWriteArrayList<>();
     final HttpBuildTimeConfig httpBuildTimeConfig;
     final ManagementInterfaceBuildTimeConfig managementBuildTimeConfig;
     final RuntimeValue<HttpConfiguration> httpConfiguration;
@@ -294,7 +310,8 @@ public class VertxHttpRecorder {
         ManagementInterfaceConfiguration managementConfig = this.managementConfiguration == null ? null
                 : this.managementConfiguration.getValue();
         if (startSocket && (httpConfiguration.hostEnabled || httpConfiguration.domainSocketEnabled
-                || managementConfig.hostEnabled || managementConfig.domainSocketEnabled)) {
+                || (managementConfig != null && managementConfig.hostEnabled)
+                || (managementConfig != null && managementConfig.domainSocketEnabled))) {
             // Start the server
             if (closeTask == null) {
                 var insecureRequestStrategy = getInsecureRequestStrategy(httpBuildTimeConfig,
@@ -608,6 +625,7 @@ public class VertxHttpRecorder {
         }
 
         if (httpManagementServerOptions != null) {
+
             vertx.createHttpServer(httpManagementServerOptions)
                     .requestHandler(managementRouter)
                     .listen(ar -> {
@@ -615,6 +633,15 @@ public class VertxHttpRecorder {
                             managementInterfaceFuture.completeExceptionally(
                                     new IllegalStateException("Unable to start the management interface", ar.cause()));
                         } else {
+                            if (httpManagementServerOptions.isSsl()
+                                    && (managementConfig.ssl.certificate.reloadPeriod.isPresent())) {
+                                long l = TlsCertificateReloader.initCertReloadingAction(
+                                        vertx, ar.result(), httpManagementServerOptions, managementConfig.ssl);
+                                if (l != -1) {
+                                    refresTaskIds.add(l);
+                                }
+                            }
+
                             actualManagementPort = ar.result().actualPort();
                             managementInterfaceFuture.complete(ar.result());
                         }
@@ -752,6 +779,7 @@ public class VertxHttpRecorder {
             if (deploymentIdIfAny != null) {
                 VertxCoreRecorder.setWebDeploymentId(deploymentIdIfAny);
             }
+
             closeTask = new Runnable() {
                 @Override
                 public synchronized void run() {
@@ -794,6 +822,9 @@ public class VertxHttpRecorder {
 
                         // shutdown the management interface
                         try {
+                            for (Long id : refresTaskIds) {
+                                TlsCertificateReloader.unschedule(vertx, id);
+                            }
                             if (managementServer != null && !isVertxClose) {
                                 managementServer.close(handler);
                             }
@@ -1000,6 +1031,7 @@ public class VertxHttpRecorder {
         private final HttpConfiguration.InsecureRequests insecureRequests;
         private final HttpConfiguration quarkusConfig;
         private final AtomicInteger connectionCount;
+        private final List<Long> reloadingTasks = new CopyOnWriteArrayList<>();
 
         public WebDeploymentVerticle(HttpServerOptions httpOptions, HttpServerOptions httpsOptions,
                 HttpServerOptions domainSocketOptions, LaunchMode launchMode,
@@ -1110,8 +1142,14 @@ public class VertxHttpRecorder {
 
         private void setupTcpHttpServer(HttpServer httpServer, HttpServerOptions options, boolean https,
                 Promise<Void> startFuture, AtomicInteger remainingCount, AtomicInteger currentConnectionCount) {
+
             if (quarkusConfig.limits.maxConnections.isPresent() && quarkusConfig.limits.maxConnections.getAsInt() > 0) {
+                var tracker = vertx.isMetricsEnabled()
+                        ? ((ExtendedQuarkusVertxHttpMetrics) ((VertxInternal) vertx).metricsSPI()).getHttpConnectionTracker()
+                        : ExtendedQuarkusVertxHttpMetrics.NOOP_CONNECTION_TRACKER;
+
                 final int maxConnections = quarkusConfig.limits.maxConnections.getAsInt();
+                tracker.initialize(maxConnections, currentConnectionCount);
                 httpServer.connectionHandler(new Handler<HttpConnection>() {
 
                     @Override
@@ -1122,6 +1160,7 @@ public class VertxHttpRecorder {
                             if (current == maxConnections) {
                                 //just close the connection
                                 LOGGER.debug("Rejecting connection as there are too many active connections");
+                                tracker.onConnectionRejected();
                                 event.close();
                                 return;
                             }
@@ -1130,7 +1169,7 @@ public class VertxHttpRecorder {
                             @Override
                             public void handle(Void event) {
                                 LOGGER.debug("Connection closed");
-                                connectionCount.decrementAndGet();
+                                currentConnectionCount.decrementAndGet();
                             }
                         });
                     }
@@ -1165,6 +1204,14 @@ public class VertxHttpRecorder {
                             portSystemProperties.set(schema, actualPort, launchMode);
                         }
 
+                        if (https && (quarkusConfig.ssl.certificate.reloadPeriod.isPresent())) {
+                            long l = TlsCertificateReloader.initCertReloadingAction(
+                                    vertx, httpsServer, httpsOptions, quarkusConfig.ssl);
+                            if (l != -1) {
+                                reloadingTasks.add(l);
+                            }
+                        }
+
                         if (remainingCount.decrementAndGet() == 0) {
                             //make sure we only complete once
                             startFuture.complete(null);
@@ -1177,6 +1224,10 @@ public class VertxHttpRecorder {
 
         @Override
         public void stop(Promise<Void> stopFuture) {
+
+            for (Long id : reloadingTasks) {
+                TlsCertificateReloader.unschedule(vertx, id);
+            }
 
             final AtomicInteger remainingCount = new AtomicInteger(0);
             if (httpServer != null) {
@@ -1273,20 +1324,20 @@ public class VertxHttpRecorder {
                 .childHandler(new ChannelInitializer<VirtualChannel>() {
                     @Override
                     public void initChannel(VirtualChannel ch) throws Exception {
-                        EventLoopContext context = vertx.createEventLoopContext();
+                        ContextInternal rootContext = vertx.createEventLoopContext();
                         VertxHandler<Http1xServerConnection> handler = VertxHandler.create(chctx -> {
 
                             Http1xServerConnection conn = new Http1xServerConnection(
                                     () -> {
-                                        ContextInternal internal = (ContextInternal) VertxContext
-                                                .getOrCreateDuplicatedContext(context);
-                                        setContextSafe(internal, true);
-                                        return internal;
+                                        ContextInternal duplicated = (ContextInternal) VertxContext
+                                                .getOrCreateDuplicatedContext(rootContext);
+                                        setContextSafe(duplicated, true);
+                                        return duplicated;
                                     },
                                     null,
                                     new HttpServerOptions(),
                                     chctx,
-                                    context,
+                                    rootContext,
                                     "localhost",
                                     null);
                             conn.handler(ACTUAL_ROOT);

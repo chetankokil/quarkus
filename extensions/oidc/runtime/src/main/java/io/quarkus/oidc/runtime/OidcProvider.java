@@ -39,6 +39,7 @@ import io.quarkus.oidc.OidcTenantConfig.CertificateChain;
 import io.quarkus.oidc.TokenCustomizer;
 import io.quarkus.oidc.TokenIntrospection;
 import io.quarkus.oidc.UserInfo;
+import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.security.credential.TokenCredential;
@@ -86,8 +87,15 @@ public class OidcProvider implements Closeable {
         this.client = client;
         this.oidcConfig = oidcConfig;
         this.tokenCustomizer = tokenCustomizer;
-        this.asymmetricKeyResolver = jwks == null ? null
-                : new JsonWebKeyResolver(jwks, oidcConfig.token.forcedJwkRefreshInterval, oidcConfig.certificateChain);
+        if (jwks != null) {
+            this.asymmetricKeyResolver = new JsonWebKeyResolver(jwks, oidcConfig.token.forcedJwkRefreshInterval,
+                    oidcConfig.certificateChain);
+        } else if (oidcConfig != null && oidcConfig.certificateChain.trustStoreFile.isPresent()) {
+            this.asymmetricKeyResolver = new CertChainPublicKeyResolver(oidcConfig.certificateChain);
+        } else {
+            this.asymmetricKeyResolver = null;
+        }
+
         if (client != null && oidcConfig != null && !oidcConfig.jwks.resolveEarly) {
             this.keyResolverProvider = new DynamicVerificationKeyResolver(client, oidcConfig);
         } else {
@@ -551,7 +559,7 @@ public class OidcProvider implements Closeable {
         @Override
         public Key resolveKey(JsonWebSignature jws, List<JsonWebStructure> nestingContext)
                 throws UnresolvableKeyException {
-            return KeyUtils.createSecretKeyFromSecret(oidcConfig.credentials.secret.get());
+            return KeyUtils.createSecretKeyFromSecret(OidcCommonUtils.clientSecret(oidcConfig.credentials));
         }
     }
 

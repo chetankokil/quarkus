@@ -12,7 +12,7 @@ import io.smallrye.common.annotation.NonBlocking;
  * @author Michal Szynkiewicz, michal.l.szynkiewicz@gmail.com
  */
 @Path("/unsecured")
-public class UnsecuredResource {
+public class UnsecuredResource extends UnsecuredParentResource implements UnsecuredResourceInterface {
     @Path("/defaultSecurity")
     @GET
     public String defaultSecurity() {
@@ -56,5 +56,17 @@ public class UnsecuredResource {
     @Path("/permitAllSub")
     public UnsecuredSubResource permitAllSub() {
         return new UnsecuredSubResource();
+    }
+
+    @Override
+    public String interfaceOverriddenDeclaredOnInterface() {
+        return "implementor-response";
+    }
+
+    @GET
+    @Path("/interface-overridden-declared-on-implementor")
+    @Override
+    public String interfaceOverriddenDeclaredOnImplementor() {
+        return "implementor-response";
     }
 }

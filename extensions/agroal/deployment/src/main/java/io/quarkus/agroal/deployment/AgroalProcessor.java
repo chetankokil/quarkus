@@ -14,8 +14,8 @@ import java.util.stream.Collectors;
 
 import javax.sql.XADataSource;
 
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Default;
-import jakarta.inject.Singleton;
 
 import org.jboss.jandex.ClassType;
 import org.jboss.jandex.DotName;
@@ -24,10 +24,10 @@ import org.jboss.logging.Logger;
 import io.agroal.api.AgroalDataSource;
 import io.agroal.api.AgroalPoolInterceptor;
 import io.quarkus.agroal.DataSource;
+import io.quarkus.agroal.runtime.AgroalDataSourceSupport;
 import io.quarkus.agroal.runtime.AgroalDataSourcesInitializer;
 import io.quarkus.agroal.runtime.AgroalRecorder;
 import io.quarkus.agroal.runtime.DataSourceJdbcBuildTimeConfig;
-import io.quarkus.agroal.runtime.DataSourceSupport;
 import io.quarkus.agroal.runtime.DataSources;
 import io.quarkus.agroal.runtime.DataSourcesJdbcBuildTimeConfig;
 import io.quarkus.agroal.runtime.JdbcDriver;
@@ -58,6 +58,7 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.RemovedResourceBuildItem;
 import io.quarkus.deployment.builditem.SslNativeConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.maven.dependency.ArtifactKey;
@@ -72,6 +73,7 @@ class AgroalProcessor {
 
     private static final String OPEN_TELEMETRY_DRIVER = "io.opentelemetry.instrumentation.jdbc.OpenTelemetryDriver";
     private static final DotName DATA_SOURCE = DotName.createSimple(javax.sql.DataSource.class.getName());
+    private static final DotName AGROAL_DATA_SOURCE = DotName.createSimple(AgroalDataSource.class.getName());
 
     @BuildStep
     void agroal(BuildProducer<FeatureBuildItem> feature) {
@@ -201,20 +203,20 @@ class AgroalProcessor {
         }
     }
 
-    private DataSourceSupport getDataSourceSupport(
+    private AgroalDataSourceSupport getDataSourceSupport(
             List<AggregatedDataSourceBuildTimeConfigBuildItem> aggregatedBuildTimeConfigBuildItems,
             SslNativeConfigBuildItem sslNativeConfig, Capabilities capabilities) {
-        Map<String, DataSourceSupport.Entry> dataSourceSupportEntries = new HashMap<>();
+        Map<String, AgroalDataSourceSupport.Entry> dataSourceSupportEntries = new HashMap<>();
         for (AggregatedDataSourceBuildTimeConfigBuildItem aggregatedDataSourceBuildTimeConfig : aggregatedBuildTimeConfigBuildItems) {
             String dataSourceName = aggregatedDataSourceBuildTimeConfig.getName();
             dataSourceSupportEntries.put(dataSourceName,
-                    new DataSourceSupport.Entry(dataSourceName, aggregatedDataSourceBuildTimeConfig.getDbKind(),
+                    new AgroalDataSourceSupport.Entry(dataSourceName, aggregatedDataSourceBuildTimeConfig.getDbKind(),
                             aggregatedDataSourceBuildTimeConfig.getDataSourceConfig().dbVersion(),
                             aggregatedDataSourceBuildTimeConfig.getResolvedDriverClass(),
                             aggregatedDataSourceBuildTimeConfig.isDefault()));
         }
 
-        return new DataSourceSupport(sslNativeConfig.isExplicitlyDisabled(),
+        return new AgroalDataSourceSupport(sslNativeConfig.isExplicitlyDisabled(),
                 capabilities.isPresent(Capability.METRICS), dataSourceSupportEntries);
     }
 
@@ -246,10 +248,11 @@ class AgroalProcessor {
         unremovableBeans.produce(UnremovableBeanBuildItem.beanTypes(AgroalPoolInterceptor.class));
 
         // create the DataSourceSupport bean that DataSourceProducer uses as a dependency
-        DataSourceSupport dataSourceSupport = getDataSourceSupport(aggregatedBuildTimeConfigBuildItems, sslNativeConfig,
+        AgroalDataSourceSupport agroalDataSourceSupport = getDataSourceSupport(aggregatedBuildTimeConfigBuildItems,
+                sslNativeConfig,
                 capabilities);
-        syntheticBeanBuildItemBuildProducer.produce(SyntheticBeanBuildItem.configure(DataSourceSupport.class)
-                .supplier(recorder.dataSourceSupportSupplier(dataSourceSupport))
+        syntheticBeanBuildItemBuildProducer.produce(SyntheticBeanBuildItem.configure(AgroalDataSourceSupport.class)
+                .supplier(recorder.dataSourceSupportSupplier(agroalDataSourceSupport))
                 .unremovable()
                 .done());
     }
@@ -277,7 +280,8 @@ class AgroalProcessor {
             SyntheticBeanBuildItem.ExtendedBeanConfigurator configurator = SyntheticBeanBuildItem
                     .configure(AgroalDataSource.class)
                     .addType(DATA_SOURCE)
-                    .scope(Singleton.class)
+                    .addType(AGROAL_DATA_SOURCE)
+                    .scope(ApplicationScoped.class)
                     .setRuntimeInit()
                     .unremovable()
                     .addInjectionPoint(ClassType.create(DotName.createSimple(DataSources.class)))
@@ -404,5 +408,17 @@ class AgroalProcessor {
                     new RemovedResourceBuildItem(ArtifactKey.fromString("io.opentelemetry.instrumentation:opentelemetry-jdbc"),
                             Set.of("io/opentelemetry/instrumentation.jdbc/internal/JdbcSingletons")));
         }
+    }
+
+    @BuildStep
+    void registerRowSetSupport(
+            BuildProducer<NativeImageResourceBundleBuildItem> resourceBundleProducer,
+            BuildProducer<NativeImageResourceBuildItem> nativeResourceProducer,
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClassProducer) {
+        resourceBundleProducer.produce(new NativeImageResourceBundleBuildItem("com.sun.rowset.RowSetResourceBundle"));
+        nativeResourceProducer.produce(new NativeImageResourceBuildItem("javax/sql/rowset/rowset.properties"));
+        reflectiveClassProducer.produce(ReflectiveClassBuildItem.builder(
+                "com.sun.rowset.providers.RIOptimisticProvider",
+                "com.sun.rowset.providers.RIXMLProvider").build());
     }
 }

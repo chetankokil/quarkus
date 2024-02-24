@@ -19,9 +19,9 @@ import io.quarkus.oidc.UserInfo;
 import io.quarkus.oidc.common.OidcEndpoint;
 import io.quarkus.oidc.common.OidcRequestContextProperties;
 import io.quarkus.oidc.common.OidcRequestFilter;
+import io.quarkus.oidc.common.runtime.OidcCommonConfig.Credentials.Secret.Method;
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcConstants;
-import io.quarkus.oidc.common.runtime.OidcEndpointAccessException;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.groups.UniOnItem;
 import io.vertx.core.Vertx;
@@ -51,6 +51,7 @@ public class OidcProviderClient implements Closeable {
     private final String introspectionBasicAuthScheme;
     private final Key clientJwtKey;
     private final Map<OidcEndpoint.Type, List<OidcRequestFilter>> filters;
+    private final boolean clientSecretQueryAuthentication;
 
     public OidcProviderClient(WebClient client,
             Vertx vertx,
@@ -65,6 +66,7 @@ public class OidcProviderClient implements Closeable {
         this.clientJwtKey = OidcCommonUtils.initClientJwtKey(oidcConfig);
         this.introspectionBasicAuthScheme = initIntrospectionBasicAuthScheme(oidcConfig);
         this.filters = filters;
+        this.clientSecretQueryAuthentication = oidcConfig.credentials.clientSecret.method.orElse(null) == Method.QUERY;
     }
 
     private static String initIntrospectionBasicAuthScheme(OidcTenantConfig oidcConfig) {
@@ -106,7 +108,7 @@ public class OidcProviderClient implements Closeable {
         if (resp.statusCode() == 200) {
             return new JsonWebKeySet(resp.bodyAsString(StandardCharsets.UTF_8.name()));
         } else {
-            throw new OidcEndpointAccessException(resp.statusCode());
+            throw responseException(metadata.getJsonWebKeySetUri(), resp);
         }
     }
 
@@ -139,38 +141,54 @@ public class OidcProviderClient implements Closeable {
 
     private UniOnItem<HttpResponse<Buffer>> getHttpResponse(String uri, MultiMap formBody, boolean introspect) {
         HttpRequest<Buffer> request = client.postAbs(uri);
-        request.putHeader(CONTENT_TYPE_HEADER, APPLICATION_X_WWW_FORM_URLENCODED);
-        request.putHeader(ACCEPT_HEADER, APPLICATION_JSON);
+
+        Buffer buffer = null;
+
+        if (!clientSecretQueryAuthentication) {
+            request.putHeader(CONTENT_TYPE_HEADER, APPLICATION_X_WWW_FORM_URLENCODED);
+            request.putHeader(ACCEPT_HEADER, APPLICATION_JSON);
+
+            if (introspect && introspectionBasicAuthScheme != null) {
+                request.putHeader(AUTHORIZATION_HEADER, introspectionBasicAuthScheme);
+                if (oidcConfig.clientId.isPresent() && oidcConfig.introspectionCredentials.includeClientId) {
+                    formBody.set(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
+                }
+            } else if (clientSecretBasicAuthScheme != null) {
+                request.putHeader(AUTHORIZATION_HEADER, clientSecretBasicAuthScheme);
+            } else if (clientJwtKey != null) {
+                String jwt = OidcCommonUtils.signJwtWithKey(oidcConfig, metadata.getTokenUri(), clientJwtKey);
+                if (OidcCommonUtils.isClientSecretPostJwtAuthRequired(oidcConfig.credentials)) {
+                    formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
+                    formBody.add(OidcConstants.CLIENT_SECRET, jwt);
+                } else {
+                    formBody.add(OidcConstants.CLIENT_ASSERTION_TYPE, OidcConstants.JWT_BEARER_CLIENT_ASSERTION_TYPE);
+                    formBody.add(OidcConstants.CLIENT_ASSERTION, jwt);
+                }
+            } else if (OidcCommonUtils.isClientSecretPostAuthRequired(oidcConfig.credentials)) {
+                formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
+                formBody.add(OidcConstants.CLIENT_SECRET, OidcCommonUtils.clientSecret(oidcConfig.credentials));
+            } else {
+                formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
+            }
+            buffer = OidcCommonUtils.encodeForm(formBody);
+        } else {
+            formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
+            formBody.add(OidcConstants.CLIENT_SECRET, OidcCommonUtils.clientSecret(oidcConfig.credentials));
+            for (Map.Entry<String, String> entry : formBody) {
+                request.addQueryParam(entry.getKey(), OidcCommonUtils.urlEncode(entry.getValue()));
+            }
+            request.putHeader(ACCEPT_HEADER, APPLICATION_JSON);
+            buffer = Buffer.buffer();
+        }
+
         if (oidcConfig.codeGrant.headers != null) {
             for (Map.Entry<String, String> headerEntry : oidcConfig.codeGrant.headers.entrySet()) {
                 request.putHeader(headerEntry.getKey(), headerEntry.getValue());
             }
         }
-        if (introspect && introspectionBasicAuthScheme != null) {
-            request.putHeader(AUTHORIZATION_HEADER, introspectionBasicAuthScheme);
-            if (oidcConfig.clientId.isPresent() && oidcConfig.introspectionCredentials.includeClientId) {
-                formBody.set(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
-            }
-        } else if (clientSecretBasicAuthScheme != null) {
-            request.putHeader(AUTHORIZATION_HEADER, clientSecretBasicAuthScheme);
-        } else if (clientJwtKey != null) {
-            String jwt = OidcCommonUtils.signJwtWithKey(oidcConfig, metadata.getTokenUri(), clientJwtKey);
-            if (OidcCommonUtils.isClientSecretPostJwtAuthRequired(oidcConfig.credentials)) {
-                formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
-                formBody.add(OidcConstants.CLIENT_SECRET, jwt);
-            } else {
-                formBody.add(OidcConstants.CLIENT_ASSERTION_TYPE, OidcConstants.JWT_BEARER_CLIENT_ASSERTION_TYPE);
-                formBody.add(OidcConstants.CLIENT_ASSERTION, jwt);
-            }
-        } else if (OidcCommonUtils.isClientSecretPostAuthRequired(oidcConfig.credentials)) {
-            formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
-            formBody.add(OidcConstants.CLIENT_SECRET, OidcCommonUtils.clientSecret(oidcConfig.credentials));
-        } else {
-            formBody.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
-        }
+
         LOG.debugf("Get token on: %s params: %s headers: %s", metadata.getTokenUri(), formBody, request.headers());
         // Retry up to three times with a one-second delay between the retries if the connection is closed.
-        Buffer buffer = OidcCommonUtils.encodeForm(formBody);
 
         OidcEndpoint.Type endpoint = introspect ? OidcEndpoint.Type.INTROSPECTION : OidcEndpoint.Type.TOKEN;
         Uni<HttpResponse<Buffer>> response = filter(endpoint, request, buffer, null).sendBuffer(buffer)
@@ -178,10 +196,11 @@ public class OidcProviderClient implements Closeable {
                 .retry()
                 .atMost(oidcConfig.connectionRetryCount).onFailure().transform(t -> t.getCause());
         return response.onItem();
+
     }
 
     private AuthorizationCodeTokens getAuthorizationCodeTokens(HttpResponse<Buffer> resp) {
-        JsonObject json = getJsonObject(resp);
+        JsonObject json = getJsonObject(metadata.getAuthorizationUri(), resp);
         final String idToken = json.getString(OidcConstants.ID_TOKEN_VALUE);
         final String accessToken = json.getString(OidcConstants.ACCESS_TOKEN_VALUE);
         final String refreshToken = json.getString(OidcConstants.REFRESH_TOKEN_VALUE);
@@ -189,35 +208,41 @@ public class OidcProviderClient implements Closeable {
     }
 
     private UserInfo getUserInfo(HttpResponse<Buffer> resp) {
-        return new UserInfo(getString(resp));
+        return new UserInfo(getString(metadata.getUserInfoUri(), resp));
     }
 
     private TokenIntrospection getTokenIntrospection(HttpResponse<Buffer> resp) {
-        return new TokenIntrospection(getString(resp));
+        return new TokenIntrospection(getString(metadata.getIntrospectionUri(), resp));
     }
 
-    private static JsonObject getJsonObject(HttpResponse<Buffer> resp) {
+    private static JsonObject getJsonObject(String requestUri, HttpResponse<Buffer> resp) {
         if (resp.statusCode() == 200) {
             LOG.debugf("Request succeeded: %s", resp.bodyAsJsonObject());
             return resp.bodyAsJsonObject();
         } else {
-            throw responseException(resp);
+            throw responseException(requestUri, resp);
         }
     }
 
-    private static String getString(HttpResponse<Buffer> resp) {
+    private static String getString(String requestUri, HttpResponse<Buffer> resp) {
         if (resp.statusCode() == 200) {
             LOG.debugf("Request succeeded: %s", resp.bodyAsString());
             return resp.bodyAsString();
         } else {
-            throw responseException(resp);
+            throw responseException(requestUri, resp);
         }
     }
 
-    private static OIDCException responseException(HttpResponse<Buffer> resp) {
+    private static OIDCException responseException(String requestUri, HttpResponse<Buffer> resp) {
         String errorMessage = resp.bodyAsString();
-        LOG.debugf("Request has failed: status: %d, error message: %s", resp.statusCode(), errorMessage);
-        throw new OIDCException(errorMessage);
+
+        if (errorMessage != null && !errorMessage.isEmpty()) {
+            LOG.errorf("Request %s has failed: status: %d, error message: %s", requestUri, resp.statusCode(), errorMessage);
+            throw new OIDCException(errorMessage);
+        } else {
+            LOG.errorf("Request %s has failed: status: %d", requestUri, resp.statusCode());
+            throw new OIDCException("Error status:" + resp.statusCode());
+        }
     }
 
     @Override
@@ -245,5 +270,9 @@ public class OidcProviderClient implements Closeable {
 
     public Vertx getVertx() {
         return vertx;
+    }
+
+    public WebClient getWebClient() {
+        return client;
     }
 }

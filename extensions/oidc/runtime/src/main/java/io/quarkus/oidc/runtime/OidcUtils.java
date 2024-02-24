@@ -13,10 +13,13 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
 import java.util.StringTokenizer;
+import java.util.TreeMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -42,6 +45,8 @@ import io.quarkus.oidc.RefreshToken;
 import io.quarkus.oidc.TokenIntrospection;
 import io.quarkus.oidc.TokenStateManager;
 import io.quarkus.oidc.UserInfo;
+import io.quarkus.oidc.common.runtime.OidcCommonUtils;
+import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.runtime.providers.KnownOidcProviders;
 import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.security.StringPermission;
@@ -56,6 +61,7 @@ import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.subscription.UniEmitter;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.http.Cookie;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.impl.ServerCookie;
@@ -72,8 +78,13 @@ public final class OidcUtils {
     public static final String TENANT_ID_ATTRIBUTE = "tenant-id";
     public static final String DEFAULT_TENANT_ID = "Default";
     public static final String SESSION_COOKIE_NAME = "q_session";
+    public static final String SESSION_COOKIE_CHUNK = "_chunk_";
     public static final String STATE_COOKIE_NAME = "q_auth";
+    public static final Integer MAX_COOKIE_VALUE_LENGTH = 4096;
     public static final String POST_LOGOUT_COOKIE_NAME = "q_post_logout";
+    static final String UNDERSCORE = "_";
+    static final String CODE_ACCESS_TOKEN_RESULT = "code_flow_access_token_result";
+    static final String COMMA = ",";
     static final Uni<Void> VOID_UNI = Uni.createFrom().voidItem();
     static final BlockingTaskRunner<Void> deleteTokensRequestContext = new BlockingTaskRunner<Void>();
 
@@ -86,6 +97,64 @@ public final class OidcUtils {
 
     private OidcUtils() {
 
+    }
+
+    public static String getSessionCookie(Map<String, Object> context, Map<String, Cookie> cookies,
+            OidcTenantConfig oidcTenantConfig) {
+        if (cookies.isEmpty()) {
+            return null;
+        }
+        final String sessionCookieName = OidcUtils.getSessionCookieName(oidcTenantConfig);
+
+        if (cookies.containsKey(sessionCookieName)) {
+            context.put(OidcUtils.SESSION_COOKIE_NAME, List.of(sessionCookieName));
+            return cookies.get(sessionCookieName).getValue();
+        } else {
+            final String sessionChunkPrefix = sessionCookieName + OidcUtils.SESSION_COOKIE_CHUNK;
+
+            SortedMap<String, String> sessionCookies = new TreeMap<>(new Comparator<String>() {
+
+                @Override
+                public int compare(String s1, String s2) {
+                    // at this point it is guaranteed cookie names end with `chunk_<somenumber>`
+                    int lastUnderscoreIndex1 = s1.lastIndexOf(UNDERSCORE);
+                    int lastUnderscoreIndex2 = s2.lastIndexOf(UNDERSCORE);
+                    Integer pos1 = Integer.valueOf(s1.substring(lastUnderscoreIndex1 + 1));
+                    Integer pos2 = Integer.valueOf(s2.substring(lastUnderscoreIndex2 + 1));
+                    return pos1.compareTo(pos2);
+                }
+
+            });
+            for (String cookieName : cookies.keySet()) {
+                if (cookieName.startsWith(sessionChunkPrefix)) {
+                    sessionCookies.put(cookieName, cookies.get(cookieName).getValue());
+                }
+            }
+            if (!sessionCookies.isEmpty()) {
+                context.put(OidcUtils.SESSION_COOKIE_NAME, new ArrayList<String>(sessionCookies.keySet()));
+
+                StringBuilder sessionCookieValue = new StringBuilder();
+                for (String value : sessionCookies.values()) {
+                    sessionCookieValue.append(value);
+                }
+                return sessionCookieValue.toString();
+            }
+        }
+        return null;
+    }
+
+    public static String getSessionCookieName(OidcTenantConfig oidcConfig) {
+        return OidcUtils.SESSION_COOKIE_NAME + getCookieSuffix(oidcConfig);
+    }
+
+    public static String getCookieSuffix(OidcTenantConfig oidcConfig) {
+        String tenantId = oidcConfig.tenantId.get();
+        boolean cookieSuffixConfigured = oidcConfig.authentication.cookieSuffix.isPresent();
+        String tenantIdSuffix = (cookieSuffixConfigured || !"Default".equals(tenantId)) ? UNDERSCORE + tenantId : "";
+
+        return cookieSuffixConfigured
+                ? (tenantIdSuffix + UNDERSCORE + oidcConfig.authentication.cookieSuffix.get())
+                : tenantIdSuffix;
     }
 
     public static boolean isServiceApp(OidcTenantConfig oidcConfig) {
@@ -282,6 +351,10 @@ public final class OidcUtils {
         setSecurityIdentityConfigMetadata(builder, resolvedContext);
         setBlockingApiAttribute(builder, vertxContext);
         setTenantIdAttribute(builder, config);
+        TokenVerificationResult codeFlowAccessTokenResult = (TokenVerificationResult) requestData.get(CODE_ACCESS_TOKEN_RESULT);
+        if (codeFlowAccessTokenResult != null) {
+            builder.addAttribute(CODE_ACCESS_TOKEN_RESULT, codeFlowAccessTokenResult);
+        }
         return builder.build();
     }
 
@@ -380,11 +453,15 @@ public final class OidcUtils {
         }
     }
 
-    static Uni<Void> removeSessionCookie(RoutingContext context, OidcTenantConfig oidcConfig, String cookieName,
+    static Uni<Void> removeSessionCookie(RoutingContext context, OidcTenantConfig oidcConfig,
             TokenStateManager tokenStateManager) {
-        String cookieValue = removeCookie(context, oidcConfig, cookieName);
-        if (cookieValue != null) {
-            return tokenStateManager.deleteTokens(context, oidcConfig, cookieValue,
+        List<String> cookieNames = context.get(SESSION_COOKIE_NAME);
+        if (cookieNames != null) {
+            StringBuilder cookieValue = new StringBuilder();
+            for (String cookieName : cookieNames) {
+                cookieValue.append(removeCookie(context, oidcConfig, cookieName));
+            }
+            return tokenStateManager.deleteTokens(context, oidcConfig, cookieValue.toString(),
                     deleteTokensRequestContext);
         } else {
             return VOID_UNI;
@@ -484,6 +561,9 @@ public final class OidcUtils {
         if (tenant.authentication.responseMode.isEmpty()) {
             tenant.authentication.responseMode = provider.authentication.responseMode;
         }
+        if (tenant.authentication.redirectPath.isEmpty()) {
+            tenant.authentication.redirectPath = provider.authentication.redirectPath;
+        }
 
         // credentials
         if (tenant.credentials.clientSecret.method.isEmpty()) {
@@ -578,5 +658,29 @@ public final class OidcUtils {
                 context.request().resume();
             }
         });
+    }
+
+    public static String encodeScopes(OidcTenantConfig oidcConfig) {
+        return OidcCommonUtils.urlEncode(String.join(" ", getAllScopes(oidcConfig)));
+    }
+
+    public static List<String> getAllScopes(OidcTenantConfig oidcConfig) {
+        List<String> oidcConfigScopes = oidcConfig.getAuthentication().scopes.isPresent()
+                ? oidcConfig.getAuthentication().scopes.get()
+                : Collections.emptyList();
+        List<String> scopes = new ArrayList<>(oidcConfigScopes.size() + 1);
+        if (oidcConfig.getAuthentication().addOpenidScope.orElse(true)) {
+            scopes.add(OidcConstants.OPENID_SCOPE);
+        }
+        scopes.addAll(oidcConfigScopes);
+        // Extra scopes if any
+        String extraScopeValue = oidcConfig.getAuthentication().getExtraParams()
+                .get(OidcConstants.TOKEN_SCOPE);
+        if (extraScopeValue != null) {
+            String[] extraScopes = extraScopeValue.split(COMMA);
+            scopes.addAll(List.of(extraScopes));
+        }
+
+        return scopes;
     }
 }

@@ -19,6 +19,7 @@ import java.util.regex.Matcher;
 
 import jakarta.ws.rs.core.Cookie;
 import jakarta.ws.rs.core.GenericEntity;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.PathSegment;
 import jakarta.ws.rs.core.Request;
@@ -148,6 +149,11 @@ public abstract class ResteasyReactiveRequestContext
 
     @Override
     public abstract ServerHttpResponse serverResponse();
+
+    @Override
+    public HttpHeaders getRequestHeaders() {
+        return getHttpHeaders();
+    }
 
     public Deployment getDeployment() {
         return deployment;
@@ -429,6 +435,9 @@ public abstract class ResteasyReactiveRequestContext
             if (!prefix.isEmpty()) {
                 // FIXME: can we really have paths that don't start with the prefix if there's a prefix?
                 if (path.startsWith(prefix)) {
+                    if (path.length() == prefix.length()) {
+                        return "/";
+                    }
                     return path.substring(prefix.length());
                 }
             }

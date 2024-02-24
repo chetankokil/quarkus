@@ -189,7 +189,7 @@ public class RuntimeResourceDeployment {
 
         ResteasyReactiveResourceInfo lazyMethod = new ResteasyReactiveResourceInfo(method.getName(), resourceClass,
                 parameterDeclaredUnresolvedTypes, classAnnotationNames, method.getMethodAnnotationNames(),
-                !defaultBlocking && !method.isBlocking());
+                !defaultBlocking && !method.isBlocking(), method.getActualDeclaringClassName());
 
         RuntimeInterceptorDeployment.MethodInterceptorContext interceptorDeployment = runtimeInterceptorDeployment
                 .forMethod(method, lazyMethod);
@@ -294,7 +294,8 @@ public class RuntimeResourceDeployment {
             // read the body as multipart in one go
             handlers.add(new FormBodyHandler(bodyParameter != null, executorSupplier, method.getFileFormNames()));
             checkWithFormReadRequestFilters = true;
-        } else if (bodyParameter != null) {
+        }
+        if (bodyParameter != null) {
             if (!defaultBlocking) {
                 if (!method.isBlocking()) {
                     // allow the body to be read by chunks

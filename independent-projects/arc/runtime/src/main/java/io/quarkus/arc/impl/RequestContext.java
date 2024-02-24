@@ -64,7 +64,7 @@ class RequestContext implements ManagedContext {
             throw Scopes.scopeDoesNotMatchException(this, bean);
         }
         RequestContextState ctxState = currentContext.get();
-        if (ctxState == null) {
+        if (!isActive(ctxState)) {
             // Context is not active!
             return null;
         }
@@ -102,7 +102,7 @@ class RequestContext implements ManagedContext {
             throw Scopes.scopeDoesNotMatchException(this, bean);
         }
         RequestContextState state = currentContext.get();
-        if (state == null) {
+        if (!isActive(state)) {
             throw notActive();
         }
         ContextInstanceHandle<T> instance = (ContextInstanceHandle<T>) state.contextInstances
@@ -112,13 +112,17 @@ class RequestContext implements ManagedContext {
 
     @Override
     public boolean isActive() {
-        return currentContext.get() != null;
+        return isActive(currentContext.get());
+    }
+
+    private boolean isActive(RequestContextState state) {
+        return state == null ? false : state.isValid();
     }
 
     @Override
     public void destroy(Contextual<?> contextual) {
         RequestContextState state = currentContext.get();
-        if (state == null) {
+        if (!isActive(state)) {
             // Context is not active
             throw notActive();
         }
@@ -163,15 +167,15 @@ class RequestContext implements ManagedContext {
     @Override
     public ContextState getState() {
         RequestContextState state = currentContext.get();
-        if (state == null) {
-            // Thread local not set - context is not active!
+        if (!isActive(state)) {
             throw notActive();
         }
         return state;
     }
 
     public ContextState getStateIfActive() {
-        return currentContext.get();
+        ContextState state = currentContext.get();
+        return state != null && state.isValid() ? state : null;
     }
 
     @Override
@@ -210,8 +214,7 @@ class RequestContext implements ManagedContext {
             if (reqState.invalidate()) {
                 // Fire an event with qualifier @BeforeDestroyed(RequestScoped.class) if there are any observers for it
                 fireIfNotEmpty(beforeDestroyedNotifier);
-                reqState.contextInstances.forEach(this::destroyContextElement);
-                reqState.contextInstances.clear();
+                reqState.contextInstances.removeEach(ContextInstanceHandle::destroy);
                 // Fire an event with qualifier @Destroyed(RequestScoped.class) if there are any observers for it
                 fireIfNotEmpty(destroyedNotifier);
             }
@@ -227,14 +230,6 @@ class RequestContext implements ManagedContext {
                 .map(se -> "\n\t" + se.toString())
                 .collect(Collectors.joining());
         LOG.tracef("Destroy %s%s\n\t...", state != null ? Integer.toHexString(state.hashCode()) : "", stack);
-    }
-
-    private void destroyContextElement(ContextInstanceHandle<?> contextInstanceHandle) {
-        try {
-            contextInstanceHandle.destroy();
-        } catch (Exception e) {
-            throw new IllegalStateException("Unable to destroy instance" + contextInstanceHandle.get(), e);
-        }
     }
 
     private void fireIfNotEmpty(Notifier<Object> notifier) {

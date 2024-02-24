@@ -12,6 +12,7 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -110,6 +111,7 @@ import org.jboss.resteasy.reactive.server.processor.scanning.MethodScanner;
 import org.jboss.resteasy.reactive.server.processor.scanning.ResponseHeaderMethodScanner;
 import org.jboss.resteasy.reactive.server.processor.scanning.ResponseStatusMethodScanner;
 import org.jboss.resteasy.reactive.server.processor.util.ResteasyReactiveServerDotNames;
+import org.jboss.resteasy.reactive.server.providers.serialisers.ServerFileBodyHandler;
 import org.jboss.resteasy.reactive.server.spi.RuntimeConfiguration;
 import org.jboss.resteasy.reactive.server.spi.ServerRestHandler;
 import org.jboss.resteasy.reactive.server.vertx.serializers.ServerMutinyAsyncFileMessageBodyWriter;
@@ -163,8 +165,11 @@ import io.quarkus.resteasy.reactive.common.deployment.ResourceInterceptorsBuildI
 import io.quarkus.resteasy.reactive.common.deployment.ResourceScanningResultBuildItem;
 import io.quarkus.resteasy.reactive.common.deployment.SerializersUtil;
 import io.quarkus.resteasy.reactive.common.deployment.ServerDefaultProducesHandlerBuildItem;
+import io.quarkus.resteasy.reactive.common.runtime.JaxRsSecurityConfig;
 import io.quarkus.resteasy.reactive.common.runtime.ResteasyReactiveConfig;
 import io.quarkus.resteasy.reactive.server.EndpointDisabled;
+import io.quarkus.resteasy.reactive.server.runtime.QuarkusServerFileBodyHandler;
+import io.quarkus.resteasy.reactive.server.runtime.QuarkusServerPathBodyHandler;
 import io.quarkus.resteasy.reactive.server.runtime.ResteasyReactiveInitialiser;
 import io.quarkus.resteasy.reactive.server.runtime.ResteasyReactiveRecorder;
 import io.quarkus.resteasy.reactive.server.runtime.ResteasyReactiveRuntimeRecorder;
@@ -175,10 +180,10 @@ import io.quarkus.resteasy.reactive.server.runtime.exceptionmappers.Authenticati
 import io.quarkus.resteasy.reactive.server.runtime.exceptionmappers.AuthenticationRedirectExceptionMapper;
 import io.quarkus.resteasy.reactive.server.runtime.exceptionmappers.ForbiddenExceptionMapper;
 import io.quarkus.resteasy.reactive.server.runtime.exceptionmappers.UnauthorizedExceptionMapper;
+import io.quarkus.resteasy.reactive.server.runtime.security.EagerSecurityContext;
 import io.quarkus.resteasy.reactive.server.runtime.security.EagerSecurityHandler;
 import io.quarkus.resteasy.reactive.server.runtime.security.EagerSecurityInterceptorHandler;
 import io.quarkus.resteasy.reactive.server.runtime.security.SecurityContextOverrideHandler;
-import io.quarkus.resteasy.reactive.server.runtime.security.SecurityEventContext;
 import io.quarkus.resteasy.reactive.server.spi.AnnotationsTransformerBuildItem;
 import io.quarkus.resteasy.reactive.server.spi.ContextTypeBuildItem;
 import io.quarkus.resteasy.reactive.server.spi.HandlerConfigurationProviderBuildItem;
@@ -1022,6 +1027,16 @@ public class ResteasyReactiveProcessor {
     }
 
     @BuildStep
+    public void fileHandling(BuildProducer<BuiltInReaderOverrideBuildItem> overrideProducer,
+            BuildProducer<MessageBodyReaderBuildItem> readerProducer) {
+        overrideProducer.produce(new BuiltInReaderOverrideBuildItem(ServerFileBodyHandler.class.getName(),
+                QuarkusServerFileBodyHandler.class.getName()));
+        readerProducer.produce(
+                new MessageBodyReaderBuildItem(QuarkusServerPathBodyHandler.class.getName(), Path.class.getName(), List.of(
+                        MediaType.WILDCARD), RuntimeType.SERVER, true, Priorities.USER));
+    }
+
+    @BuildStep
     @Record(value = ExecutionTime.STATIC_INIT, useIdentityComparisonForParameters = false)
     public void serverSerializers(ResteasyReactiveRecorder recorder,
             BeanContainerBuildItem beanContainerBuildItem,
@@ -1030,6 +1045,7 @@ public class ResteasyReactiveProcessor {
             List<MessageBodyWriterBuildItem> additionalMessageBodyWriters,
             List<MessageBodyReaderOverrideBuildItem> messageBodyReaderOverrideBuildItems,
             List<MessageBodyWriterOverrideBuildItem> messageBodyWriterOverrideBuildItems,
+            List<BuiltInReaderOverrideBuildItem> builtInReaderOverrideBuildItems,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
             BuildProducer<ServerSerialisersBuildItem> serverSerializersProducer) {
 
@@ -1047,11 +1063,16 @@ public class ResteasyReactiveProcessor {
             reflectiveClass.produce(ReflectiveClassBuildItem.builder(builtinWriter.writerClass.getName())
                     .build());
         }
+        Map<String, String> builtInReaderOverrides = BuiltInReaderOverrideBuildItem.toMap(builtInReaderOverrideBuildItems);
         for (Serialisers.BuiltinReader builtinReader : ServerSerialisers.BUILTIN_READERS) {
-            registerReader(recorder, serialisers, builtinReader.entityClass.getName(), builtinReader.readerClass.getName(),
+            String effectiveReaderClassName = builtinReader.readerClass.getName();
+            if (builtInReaderOverrides.containsKey(effectiveReaderClassName)) {
+                effectiveReaderClassName = builtInReaderOverrides.get(effectiveReaderClassName);
+            }
+            registerReader(recorder, serialisers, builtinReader.entityClass.getName(), effectiveReaderClassName,
                     beanContainerBuildItem.getValue(),
                     builtinReader.mediaType, builtinReader.constraint);
-            reflectiveClass.produce(ReflectiveClassBuildItem.builder(builtinReader.readerClass.getName())
+            reflectiveClass.produce(ReflectiveClassBuildItem.builder(effectiveReaderClassName)
                     .build());
         }
 
@@ -1260,10 +1281,12 @@ public class ResteasyReactiveProcessor {
             servletPresent = true;
         }
 
+        boolean resumeOn404 = servletPresent || !resumeOn404Items.isEmpty() || config.resumeOn404();
+
         RuntimeValue<Deployment> deployment = recorder.createDeployment(deploymentInfo,
                 beanContainerBuildItem.getValue(), shutdownContext, vertxConfig,
                 requestContextFactoryBuildItem.map(RequestContextFactoryBuildItem::getFactory).orElse(null),
-                initClassFactory, launchModeBuildItem.getLaunchMode(), servletPresent || !resumeOn404Items.isEmpty());
+                initClassFactory, launchModeBuildItem.getLaunchMode(), resumeOn404);
 
         quarkusRestDeploymentBuildItemBuildProducer
                 .produce(new ResteasyReactiveDeploymentBuildItem(deployment, deploymentPath));
@@ -1490,42 +1513,39 @@ public class ResteasyReactiveProcessor {
 
     @BuildStep
     MethodScannerBuildItem integrateEagerSecurity(Capabilities capabilities, CombinedIndexBuildItem indexBuildItem,
-            HttpBuildTimeConfig httpBuildTimeConfig, Optional<EagerSecurityInterceptorBuildItem> eagerSecurityInterceptors) {
+            HttpBuildTimeConfig httpBuildTimeConfig, Optional<EagerSecurityInterceptorBuildItem> eagerSecurityInterceptors,
+            JaxRsSecurityConfig securityConfig) {
         if (!capabilities.isPresent(Capability.SECURITY)) {
             return null;
         }
 
         final boolean applySecurityInterceptors = eagerSecurityInterceptors.isPresent();
-        final boolean denyJaxRs = ConfigProvider.getConfig()
-                .getOptionalValue("quarkus.security.jaxrs.deny-unannotated-endpoints", Boolean.class).orElse(false);
-        final boolean hasDefaultJaxRsRolesAllowed = ConfigProvider.getConfig()
-                .getOptionalValues("quarkus.security.jaxrs.default-roles-allowed", String.class).map(l -> !l.isEmpty())
-                .orElse(false);
+        final boolean denyJaxRs = securityConfig.denyJaxRs();
+        final boolean hasDefaultJaxRsRolesAllowed = !securityConfig.defaultRolesAllowed().orElse(List.of()).isEmpty();
         var index = indexBuildItem.getComputingIndex();
         return new MethodScannerBuildItem(new MethodScanner() {
             @Override
             public List<HandlerChainCustomizer> scan(MethodInfo method, ClassInfo actualEndpointClass,
                     Map<String, Object> methodContext) {
-                List<HandlerChainCustomizer> securityHandlerList = consumeStandardSecurityAnnotations(method,
-                        actualEndpointClass, index,
-                        (c) -> Collections.singletonList(
-                                EagerSecurityHandler.Customizer.newInstance(httpBuildTimeConfig.auth.proactive)));
-                if (securityHandlerList == null && (denyJaxRs || hasDefaultJaxRsRolesAllowed)) {
-                    securityHandlerList = Collections
-                            .singletonList(EagerSecurityHandler.Customizer.newInstance(httpBuildTimeConfig.auth.proactive));
-                }
                 if (applySecurityInterceptors && eagerSecurityInterceptors.get().applyInterceptorOn(method)) {
-                    List<HandlerChainCustomizer> nextSecurityHandlerList = new ArrayList<>();
-                    nextSecurityHandlerList.add(EagerSecurityInterceptorHandler.Customizer.newInstance());
-
-                    // EagerSecurityInterceptorHandler must be run before EagerSecurityHandler
-                    if (securityHandlerList != null) {
-                        nextSecurityHandlerList.addAll(securityHandlerList);
+                    // EagerSecurityHandler needs to be present whenever the method requires eager interceptor
+                    // because JAX-RS specific HTTP Security policies are defined by runtime config properties
+                    // for example: when you annotate resource method with @Tenant("hr") you select OIDC tenant,
+                    // so we can't authenticate before the tenant is selected, only after then HTTP perms can be checked
+                    return List.of(EagerSecurityInterceptorHandler.Customizer.newInstance(),
+                            EagerSecurityHandler.Customizer.newInstance(httpBuildTimeConfig.auth.proactive));
+                } else {
+                    if (denyJaxRs || hasDefaultJaxRsRolesAllowed) {
+                        return List.of(EagerSecurityHandler.Customizer.newInstance(httpBuildTimeConfig.auth.proactive));
+                    } else {
+                        return Objects
+                                .requireNonNullElse(
+                                        consumeStandardSecurityAnnotations(method, actualEndpointClass, index,
+                                                (c) -> Collections.singletonList(EagerSecurityHandler.Customizer
+                                                        .newInstance(httpBuildTimeConfig.auth.proactive))),
+                                        Collections.emptyList());
                     }
-
-                    securityHandlerList = List.copyOf(nextSecurityHandlerList);
                 }
-                return Objects.requireNonNullElse(securityHandlerList, Collections.emptyList());
             }
         });
     }
@@ -1588,7 +1608,7 @@ public class ResteasyReactiveProcessor {
                     StandardSecurityCheckInterceptor.AuthenticatedInterceptor.class,
                     StandardSecurityCheckInterceptor.PermitAllInterceptor.class,
                     StandardSecurityCheckInterceptor.PermissionsAllowedInterceptor.class));
-            beans.produce(AdditionalBeanBuildItem.unremovableOf(SecurityEventContext.class));
+            beans.produce(AdditionalBeanBuildItem.unremovableOf(EagerSecurityContext.class));
         }
     }
 

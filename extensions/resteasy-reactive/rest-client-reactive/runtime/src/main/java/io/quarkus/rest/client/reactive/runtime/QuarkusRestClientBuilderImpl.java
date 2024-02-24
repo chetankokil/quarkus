@@ -238,6 +238,18 @@ public class QuarkusRestClientBuilderImpl implements QuarkusRestClientBuilder {
     }
 
     @Override
+    public QuarkusRestClientBuilder trustAll(boolean trustAll) {
+        proxy.trustAll(trustAll);
+        return this;
+    }
+
+    @Override
+    public QuarkusRestClientBuilder userAgent(String userAgent) {
+        proxy.userAgent(userAgent);
+        return this;
+    }
+
+    @Override
     public <T> T build(Class<T> clazz) throws IllegalStateException, RestClientDefinitionException {
         return proxy.build(clazz);
     }
