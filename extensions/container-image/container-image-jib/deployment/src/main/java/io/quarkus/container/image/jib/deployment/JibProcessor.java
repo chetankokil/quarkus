@@ -101,6 +101,8 @@ public class JibProcessor {
     private static final String JAVA_17_BASE_IMAGE = String.format("%s/%s-17-%s:1.18", UBI8_PREFIX, OPENJDK_PREFIX,
             RUNTIME_SUFFIX);
 
+    // The source for this can be found at https://github.com/jboss-container-images/openjdk/blob/ubi8/modules/run/artifacts/opt/jboss/container/java/run/run-java.sh
+    // A list of env vars that affect this script can be found at https://jboss-container-images.github.io/openjdk/ubi8/ubi8-openjdk-17.html
     private static final String RUN_JAVA_PATH = "/opt/jboss/container/java/run/run-java.sh";
 
     private static final String DEFAULT_BASE_IMAGE_USER = "185";
@@ -455,6 +457,7 @@ public class JibProcessor {
             // which would mean AppCDS would not be taken into account at all
             entrypoint = List.of(RUN_JAVA_PATH);
             envVars.put("JAVA_APP_JAR", workDirInContainer + "/" + JarResultBuildStep.QUARKUS_RUN_JAR);
+            envVars.put("JAVA_APP_DIR", workDirInContainer.toString());
             envVars.put("JAVA_OPTS_APPEND", String.join(" ", determineEffectiveJvmArguments(jibConfig, appCDSResult)));
         } else {
             List<String> effectiveJvmArguments = determineEffectiveJvmArguments(jibConfig, appCDSResult);
