@@ -1,6 +1,8 @@
 package io.quarkus.smallrye.graphql.runtime;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.SubmissionPublisher;
 import java.util.function.Consumer;
 
 import graphql.schema.GraphQLSchema;
@@ -25,13 +27,28 @@ import io.vertx.ext.web.RoutingContext;
 
 @Recorder
 public class SmallRyeGraphQLRecorder {
+    private final SmallRyeGraphQLConfig graphQLConfig;
+    private final RuntimeValue<SmallRyeGraphQLRuntimeConfig> runtimeConfig;
 
-    public RuntimeValue<Boolean> createExecutionService(BeanContainer beanContainer,
-            Schema schema,
-            SmallRyeGraphQLConfig graphQLConfig) {
+    public SmallRyeGraphQLRecorder(
+            final SmallRyeGraphQLConfig graphQLConfig,
+            final RuntimeValue<SmallRyeGraphQLRuntimeConfig> runtimeConfig) {
+        this.graphQLConfig = graphQLConfig;
+        this.runtimeConfig = runtimeConfig;
+    }
+
+    public RuntimeValue<SubmissionPublisher<String>> createTraficLogPublisher() {
+        return new RuntimeValue<>(new SubmissionPublisher<>());
+    }
+
+    public RuntimeValue<Boolean> createExecutionService(BeanContainer beanContainer, Schema schema,
+            Optional<RuntimeValue<SubmissionPublisher<String>>> publisher) {
         GraphQLProducer graphQLProducer = beanContainer.beanInstance(GraphQLProducer.class);
-        if (graphQLConfig.extraScalars.isPresent()) {
-            registerExtraScalars(graphQLConfig.extraScalars.get());
+        if (graphQLConfig.extraScalars().isPresent()) {
+            registerExtraScalars(graphQLConfig.extraScalars().get());
+        }
+        if (publisher.isPresent()) {
+            graphQLProducer.setTraficPublisher(publisher.get().getValue());
         }
         GraphQLSchema graphQLSchema = graphQLProducer.initialize(schema);
         return new RuntimeValue<>(graphQLSchema != null);
@@ -42,6 +59,12 @@ public class SmallRyeGraphQLRecorder {
             switch (extraScalar) {
                 case UUID:
                     GraphQLScalarTypes.addUuid();
+                    break;
+                case OBJECT:
+                    GraphQLScalarTypes.addObject();
+                    break;
+                case JSON:
+                    GraphQLScalarTypes.addJson();
                     break;
             }
         }
@@ -79,9 +102,9 @@ public class SmallRyeGraphQLRecorder {
 
     public Handler<RoutingContext> uiHandler(String graphqlUiFinalDestination,
             String graphqlUiPath, List<FileSystemStaticHandler.StaticWebRootConfiguration> webRootConfigurations,
-            SmallRyeGraphQLRuntimeConfig runtimeConfig, ShutdownContext shutdownContext) {
+            ShutdownContext shutdownContext) {
 
-        if (runtimeConfig.enable) {
+        if (runtimeConfig.getValue().enable()) {
             WebJarStaticHandler handler = new WebJarStaticHandler(graphqlUiFinalDestination, graphqlUiPath,
                     webRootConfigurations);
             shutdownContext.addShutdownTask(new ShutdownContext.CloseRunnable(handler));

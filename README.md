@@ -4,12 +4,13 @@
 [![Version](https://img.shields.io/maven-central/v/io.quarkus/quarkus-bom?logo=apache-maven&style=for-the-badge)](https://search.maven.org/artifact/io.quarkus/quarkus-bom)
 [![GitHub Actions Status](<https://img.shields.io/github/actions/workflow/status/QuarkusIO/quarkus/ci-actions-incremental.yml?branch=main&logo=GitHub&style=for-the-badge>)](https://github.com/quarkusio/quarkus/actions?query=workflow%3A%22Quarkus+CI%22)
 [![Commits](https://img.shields.io/github/commit-activity/m/quarkusio/quarkus.svg?label=commits&style=for-the-badge&logo=git&logoColor=white)](https://github.com/quarkusio/quarkus/pulse)
-[![License](https://img.shields.io/github/license/quarkusio/quarkus?style=for-the-badge&logo=apache)](https://www.apache.org/licenses/LICENSE-2.0)
+[![License](https://img.shields.io/github/license/quarkusio/quarkus?style=for-the-badge&logo=apache&color=brightgreen)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Project Chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg?style=for-the-badge&logo=zulip)](https://quarkusio.zulipchat.com/)
 [![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-Ready--to--Code-blue?style=for-the-badge&logo=gitpod&logoColor=white)](https://gitpod.io/#https://github.com/quarkusio/quarkus/-/tree/main/)
 [![Supported JVM Versions](https://img.shields.io/badge/JVM-17--21-brightgreen.svg?style=for-the-badge&logo=openjdk)](https://github.com/quarkusio/quarkus/actions/runs/113853915/)
-[![Develocity](https://img.shields.io/badge/Revved%20up%20by-Develocity-06A0CE?style=for-the-badge&logo=gradle)](https://ge.quarkus.io/scans)
+[![Develocity](https://img.shields.io/badge/Revved%20up%20by-Develocity-007EC5?style=for-the-badge&logo=gradle)](https://ge.quarkus.io/scans)
 [![GitHub Repo stars](https://img.shields.io/github/stars/quarkusio/quarkus?style=for-the-badge)](https://github.com/quarkusio/quarkus/stargazers)
+[![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20Quarkus%20Guru-007EC5?style=for-the-badge)](https://gurubase.io/g/quarkus)
 
 # Quarkus - Supersonic Subatomic Java
 

@@ -109,7 +109,7 @@ class EvaluatorImpl implements Evaluator {
                         // Continue to the next part of the expression
                         return resolveReference(false, r, parts, resolutionContext, expression, 1);
                     } else if (strictRendering) {
-                        throw propertyNotFound(r, expression);
+                        return CompletedStage.failure(propertyNotFound(r, expression));
                     }
                     return Results.notFound(context);
                 }
@@ -141,9 +141,9 @@ class EvaluatorImpl implements Evaluator {
 
         if (tryCachedResolver) {
             // Try the cached resolver first
-            ValueResolver cachedResolver = evalContext.getCachedResolver();
-            if (cachedResolver != null && cachedResolver.appliesTo(evalContext)) {
-                return cachedResolver.resolve(evalContext).thenCompose(r -> {
+            ValueResolver cached = evalContext.getCachedResolver();
+            if (cached != null && cached.appliesTo(evalContext)) {
+                return cached.resolve(evalContext).thenCompose(r -> {
                     if (Results.isNotFound(r)) {
                         return resolve(evalContext, null, false, expression, isLastPart, partIndex);
                     } else {
@@ -199,9 +199,9 @@ class EvaluatorImpl implements Evaluator {
                     notFound = Results.NotFound.from(evalContext);
                 }
             }
-            // If in strict mode then just throw an exception
+            // If in strict mode then just fail
             if (strictRendering && isLastPart) {
-                throw propertyNotFound(notFound, expression);
+                return CompletedStage.failure(propertyNotFound(notFound, expression));
             }
             return CompletedStage.of(notFound);
         }
@@ -214,7 +214,7 @@ class EvaluatorImpl implements Evaluator {
                 return resolve(evalContext, remainingResolvers, false, expression, isLastPart, partIndex);
             } else {
                 // Cache the first resolver where a result is found
-                evalContext.setCachedResolver(foundResolver);
+                evalContext.setCachedResolver(foundResolver.getCachedResolver(evalContext));
                 return CompletionStageSupport.toCompletionStage(r);
             }
         });
@@ -289,6 +289,11 @@ class EvaluatorImpl implements Evaluator {
         @Override
         public Object getAttribute(String key) {
             return resolutionContext.getAttribute(key);
+        }
+
+        @Override
+        public ResolutionContext resolutionContext() {
+            return resolutionContext;
         }
 
         @Override
@@ -403,6 +408,11 @@ class EvaluatorImpl implements Evaluator {
 
         boolean tryParent() {
             return true;
+        }
+
+        @Override
+        public ResolutionContext resolutionContext() {
+            return resolutionContext;
         }
 
         @Override

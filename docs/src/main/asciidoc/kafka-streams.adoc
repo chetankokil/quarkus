@@ -22,7 +22,7 @@ It is recommended, that you have read the link:{quickstarts-tree-url}/kafka-quic
 
 [NOTE]
 ====
-The Quarkus extension for Kafka Streams allows for very fast turnaround times during development by supporting the Quarkus Dev Mode (e.g. via `./mvnw compile quarkus:dev`).
+The Quarkus extension for Kafka Streams allows for very fast turnaround times during development by supporting the Quarkus Dev Mode (e.g. via `./mvnw quarkus:dev`).
 After changing the code of your Kafka Streams topology, the application will automatically be reloaded when the next input message arrives.
 
 A recommended development set-up is to have some producer which creates test messages on the processed topic(s) in fixed intervals, e.g. every second and observe the streaming application's output topic(s) using a tool such as `kafkacat`.
@@ -87,10 +87,10 @@ include::{includes}/devtools/create-app.adoc[]
 
 This command generates a Maven project, importing the Reactive Messaging and Kafka connector extensions.
 
-If you already have your Quarkus project configured, you can add the `smallrye-reactive-messaging-kafka` extension
+If you already have your Quarkus project configured, you can add the `messaging-kafka` extension
 to your project by running the following command in your project base directory:
 
-:add-extension-extensions: quarkus-smallrye-reactive-messaging-kafka
+:add-extension-extensions: quarkus-messaging-kafka
 include::{includes}/devtools/extension-add.adoc[]
 
 This will add the following to your build file:
@@ -100,14 +100,14 @@ This will add the following to your build file:
 ----
 <dependency>
     <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-smallrye-reactive-messaging-kafka</artifactId>
+    <artifactId>quarkus-messaging-kafka</artifactId>
 </dependency>
 ----
 
 [source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
 .build.gradle
 ----
-implementation("io.quarkus:quarkus-smallrye-reactive-messaging-kafka")
+implementation("io.quarkus:quarkus-messaging-kafka")
 ----
 
 === The Temperature Value Producer
@@ -233,11 +233,11 @@ which will run the Kafka Streams pipeline.
 Create another project like so:
 
 :create-app-artifact-id: kafka-streams-quickstart-aggregator
-:create-app-extensions: kafka-streams,resteasy-reactive-jackson
+:create-app-extensions: kafka-streams,rest-jackson
 :create-app-post-command: mv kafka-streams-quickstart-aggregator aggregator
 include::{includes}/devtools/create-app.adoc[]
 
-This creates the `aggregator` project with the Quarkus extension for Kafka Streams and with the Jackson support for RESTEasy Reactive.
+This creates the `aggregator` project with the Quarkus extension for Kafka Streams and with the Jackson support for Quarkus REST (formerly RESTEasy Reactive).
 
 If you already have your Quarkus project configured, you can add the `kafka-streams` extension
 to your project by running the following command in your project base directory:
@@ -499,7 +499,7 @@ version: '3.5'
 
 services:
   zookeeper:
-    image: quay.io/strimzi/kafka:0.39.0-kafka-3.6.1
+    image: quay.io/strimzi/kafka:0.41.0-kafka-3.7.0
     command: [
       "sh", "-c",
       "bin/zookeeper-server-start.sh config/zookeeper.properties"
@@ -511,7 +511,7 @@ services:
     networks:
       - kafkastreams-network
   kafka:
-    image: quay.io/strimzi/kafka:0.39.0-kafka-3.6.1
+    image: quay.io/strimzi/kafka:0.41.0-kafka-3.7.0
     command: [
       "sh", "-c",
       "bin/kafka-server-start.sh config/server.properties --override listeners=$${KAFKA_LISTENERS} --override advertised.listeners=$${KAFKA_ADVERTISED_LISTENERS} --override zookeeper.connect=$${KAFKA_ZOOKEEPER_CONNECT} --override num.partitions=$${KAFKA_NUM_PARTITIONS}"

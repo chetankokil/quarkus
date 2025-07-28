@@ -15,11 +15,11 @@ import io.vertx.core.http.StreamPriority;
 import io.vertx.core.net.HostAndPort;
 import io.vertx.core.streams.ReadStream;
 
-class AbstractResponseWrapper implements HttpServerResponse {
+public class AbstractResponseWrapper implements HttpServerResponse {
 
     private final HttpServerResponse delegate;
 
-    AbstractResponseWrapper(HttpServerResponse delegate) {
+    protected AbstractResponseWrapper(HttpServerResponse delegate) {
         this.delegate = delegate;
     }
 
@@ -167,6 +167,11 @@ class AbstractResponseWrapper implements HttpServerResponse {
     public HttpServerResponse endHandler(Handler<Void> handler) {
         delegate.endHandler(handler);
         return this;
+    }
+
+    @Override
+    public Future<Void> writeHead() {
+        return delegate.writeHead();
     }
 
     @Override

@@ -14,7 +14,6 @@ import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.Type;
 import org.jboss.logging.Logger;
 
-import io.quarkus.deployment.SuppressForbidden;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Produce;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
@@ -22,6 +21,7 @@ import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.common.annotation.NonBlocking;
 import io.smallrye.common.annotation.RunOnVirtualThread;
+import io.smallrye.common.annotation.SuppressForbidden;
 
 public class ExecutionModelAnnotationsProcessor {
     private static final Logger log = Logger.getLogger(ExecutionModelAnnotationsProcessor.class);
@@ -86,6 +86,11 @@ public class ExecutionModelAnnotationsProcessor {
         }
     }
 
+    /**
+     * @deprecated this method will be removed in Quarkus 3.24, which gives extensions 2 releases
+     *             to start producing {@code JsonRPCProvidersBuildItem} always, not just in dev mode
+     */
+    @Deprecated(since = "3.22", forRemoval = true)
     @BuildStep
     ExecutionModelAnnotationsAllowedBuildItem devuiJsonRpcServices() {
         return new ExecutionModelAnnotationsAllowedBuildItem(new Predicate<MethodInfo>() {

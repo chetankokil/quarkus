@@ -9,6 +9,7 @@ import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -33,7 +34,7 @@ public class CliDriver {
     public static class CliDriverBuilder {
 
         private Path startingDir;
-        private List<String> args = new ArrayList<>();
+        private final List<String> args = new ArrayList<>();
         private String mavenLocalRepo;
         private String mavenSettings;
 
@@ -46,9 +47,7 @@ public class CliDriver {
         }
 
         public CliDriverBuilder addArgs(String... args) {
-            for (String s : args) {
-                this.args.add(s);
-            }
+            Collections.addAll(this.args, args);
             return this;
         }
 
@@ -151,34 +150,26 @@ public class CliDriver {
         getMavenSettingsProperty().map(SETTINGS_ARG_FORMATTER).ifPresent(args::add);
     }
 
-    public static Result executeArbitraryCommand(Path startingDir, String... args) throws Exception {
+    public static Result executeArbitraryCommand(Path startingDir, String... args) {
         System.out.println("$ " + String.join(" ", args));
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrintStream outPs = new PrintStream(out);
-        System.setOut(outPs);
-
-        ByteArrayOutputStream err = new ByteArrayOutputStream();
-        PrintStream errPs = new PrintStream(err);
-        System.setErr(errPs);
-
+        StringBuilder errorBuilder = new StringBuilder();
         Result result = new Result();
-        try {
-            ProcessBuilder pb = new ProcessBuilder(args);
-            pb.directory(startingDir.toFile());
-            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
 
-            Process p = pb.start();
-            p.waitFor();
-            outPs.flush();
-            errPs.flush();
-        } finally {
-            System.setOut(stdout);
-            System.setErr(stderr);
-        }
-        result.stdout = out.toString();
-        result.stderr = err.toString();
+        String output = io.smallrye.common.process.ProcessBuilder.newBuilder(Path.of(args[0]))
+                .arguments(Arrays.copyOfRange(args, 1, args.length))
+                .exitCodeChecker(ec -> {
+                    result.exitCode = ec;
+                    return true;
+                })
+                .directory(startingDir)
+                .output().toSingleString(65536)
+                .error().consumeLinesWith(65536, line -> errorBuilder.append(line).append(System.lineSeparator()))
+                .run();
+        String error = errorBuilder.toString();
+
+        result.stdout = output;
+        result.stderr = error;
         return result;
     }
 
@@ -372,46 +363,46 @@ public class CliDriver {
 
     public static Result invokeExtensionAddMultipleCommas(Path projectRoot, Path file) throws Exception {
         Result result = execute(projectRoot, "extension", "add",
-                "quarkus-resteasy-reactive-jsonb,quarkus-resteasy-reactive-jackson", "-e", "-B", "--verbose");
+                "quarkus-rest-jsonb,quarkus-rest-jackson", "-e", "-B", "--verbose");
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode,
                 "Expected OK return code. Result:\n" + result);
 
         result = invokeValidateExtensionList(projectRoot);
         Assertions.assertTrue(result.stdout.contains("quarkus-qute"),
                 "Expected quarkus-qute to be in the list of extensions. Result:\n" + result);
-        Assertions.assertTrue(result.stdout.contains("quarkus-resteasy-reactive-jsonb"),
-                "Expected quarkus-resteasy-reactive-jsonb to be in the list of extensions. Result:\n" + result);
-        Assertions.assertTrue(result.stdout.contains("quarkus-resteasy-reactive-jackson"),
-                "Expected quarkus-resteasy-reactive-jackson to be in the list of extensions. Result:\n" + result);
+        Assertions.assertTrue(result.stdout.contains("quarkus-rest-jsonb"),
+                "Expected quarkus-rest-jsonb to be in the list of extensions. Result:\n" + result);
+        Assertions.assertTrue(result.stdout.contains("quarkus-rest-jackson"),
+                "Expected quarkus-rest-jackson to be in the list of extensions. Result:\n" + result);
 
         String content = CliDriver.readFileAsString(file);
         Assertions.assertTrue(content.contains("quarkus-qute"),
                 "quarkus-qute should still be listed as a dependency. Result:\n" + content);
-        Assertions.assertTrue(content.contains("quarkus-resteasy-reactive-jsonb"),
-                "quarkus-resteasy-reactive-jsonb should be listed as a dependency. Result:\n" + content);
-        Assertions.assertTrue(content.contains("quarkus-resteasy-reactive-jackson"),
-                "quarkus-resteasy-reactive-jackson should be listed as a dependency. Result:\n" + content);
+        Assertions.assertTrue(content.contains("quarkus-rest-jsonb"),
+                "quarkus-rest-jsonb should be listed as a dependency. Result:\n" + content);
+        Assertions.assertTrue(content.contains("quarkus-rest-jackson"),
+                "quarkus-rest-jackson should be listed as a dependency. Result:\n" + content);
 
         return result;
     }
 
     public static Result invokeExtensionRemoveMultipleCommas(Path projectRoot, Path file) throws Exception {
         Result result = execute(projectRoot, "extension", "remove",
-                "quarkus-resteasy-reactive-jsonb,quarkus-resteasy-reactive-jackson", "-e", "-B", "--verbose");
+                "quarkus-rest-jsonb,quarkus-rest-jackson", "-e", "-B", "--verbose");
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode,
                 "Expected OK return code. Result:\n" + result);
 
         result = invokeValidateExtensionList(projectRoot);
-        Assertions.assertFalse(result.stdout.contains("quarkus-resteasy-reactive-jsonb"),
-                "quarkus-resteasy-reactive-jsonb should not be in the list of extensions. Result:\n" + result);
-        Assertions.assertFalse(result.stdout.contains("quarkus-resteasy-reactive-jackson"),
-                "quarkus-resteasy-reactive-jackson should not be in the list of extensions. Result:\n" + result);
+        Assertions.assertFalse(result.stdout.contains("quarkus-rest-jsonb"),
+                "quarkus-rest-jsonb should not be in the list of extensions. Result:\n" + result);
+        Assertions.assertFalse(result.stdout.contains("quarkus-rest-jackson"),
+                "quarkus-rest-jackson should not be in the list of extensions. Result:\n" + result);
 
         String content = CliDriver.readFileAsString(file);
-        Assertions.assertFalse(content.contains("quarkus-resteasy-reactive-jsonb"),
-                "quarkus-resteasy-reactive-jsonb should not be listed as a dependency. Result:\n" + content);
-        Assertions.assertFalse(content.contains("quarkus-resteasy-reactive-jackson"),
-                "quarkus-resteasy-reactive-jackson should not be listed as a dependency. Result:\n" + content);
+        Assertions.assertFalse(content.contains("quarkus-rest-jsonb"),
+                "quarkus-rest-jsonb should not be listed as a dependency. Result:\n" + content);
+        Assertions.assertFalse(content.contains("quarkus-rest-jackson"),
+                "quarkus-rest-jackson should not be listed as a dependency. Result:\n" + content);
 
         return result;
     }

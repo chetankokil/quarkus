@@ -41,6 +41,8 @@ import jakarta.ws.rs.core.UriInfo;
  * <p>
  * The return type of the method must be either be of type {@code Response}, {@code Uni<Response>}, {@code RestResponse} or
  * {@code Uni<RestResponse>}.
+ * <p>
+ * See also {@link UnwrapException}
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
@@ -49,7 +51,11 @@ public @interface ServerExceptionMapper {
     Class<? extends Throwable>[] value() default {};
 
     /**
-     * The priority with which the exception mapper will be executed
+     * The priority with which the exception mapper will be executed.
+     * <p>
+     * They are sorted in ascending order; the lower the number the higher the priority.
+     *
+     * @see Priorities
      */
     int priority() default Priorities.USER;
 }

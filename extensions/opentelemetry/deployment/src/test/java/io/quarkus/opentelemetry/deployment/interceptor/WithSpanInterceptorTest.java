@@ -4,18 +4,22 @@ import static io.opentelemetry.api.trace.SpanKind.CLIENT;
 import static io.opentelemetry.api.trace.SpanKind.INTERNAL;
 import static io.opentelemetry.api.trace.SpanKind.SERVER;
 import static io.opentelemetry.api.trace.StatusCode.ERROR;
-import static io.quarkus.opentelemetry.deployment.common.TestSpanExporter.getSpanByKindAndParentId;
+import static io.opentelemetry.semconv.incubating.CodeIncubatingAttributes.CODE_FUNCTION;
+import static io.opentelemetry.semconv.incubating.CodeIncubatingAttributes.CODE_NAMESPACE;
+import static io.quarkus.opentelemetry.deployment.common.exporter.TestSpanExporter.getSpanByKindAndParentId;
 import static java.net.HttpURLConnection.HTTP_OK;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import java.time.Duration;
 import java.util.List;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.client.Client;
 import jakarta.ws.rs.client.ClientBuilder;
 import jakarta.ws.rs.client.WebTarget;
 import jakarta.ws.rs.core.Response;
@@ -28,15 +32,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.instrumentation.annotations.SpanAttribute;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
+import io.opentelemetry.sdk.trace.data.ExceptionEventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
-import io.opentelemetry.sdk.trace.internal.data.ExceptionEventData;
-import io.quarkus.opentelemetry.deployment.common.TestSpanExporter;
-import io.quarkus.opentelemetry.deployment.common.TestSpanExporterProvider;
+import io.quarkus.opentelemetry.deployment.common.exporter.TestSpanExporter;
+import io.quarkus.opentelemetry.deployment.common.exporter.TestSpanExporterProvider;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.test.QuarkusUnitTest;
 import io.smallrye.config.SmallRyeConfig;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.Uni;
 import io.vertx.ext.web.Router;
 
 public class WithSpanInterceptorTest {
@@ -49,7 +56,7 @@ public class WithSpanInterceptorTest {
                             .addAsManifestResource(
                                     "META-INF/services-config/io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSpanExporterProvider",
                                     "services/io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSpanExporterProvider")
-                            .addAsResource("resource-config/application.properties", "application.properties"));
+                            .addAsResource("resource-config/application-no-metrics.properties", "application.properties"));
 
     @Inject
     SpanBean spanBean;
@@ -82,17 +89,21 @@ public class WithSpanInterceptorTest {
     void spanKind() {
         spanBean.spanKind();
         List<SpanData> spanItems = spanExporter.getFinishedSpanItems(1);
-        assertEquals("SpanBean.spanKind", spanItems.get(0).getName());
-        assertEquals(SERVER, spanItems.get(0).getKind());
+        SpanData span = spanItems.get(0);
+        assertEquals("SpanBean.spanKind", span.getName());
+        assertEquals(SERVER, span.getKind());
+        assertClassMethodNames(span, SpanBean.class, "spanKind");
     }
 
     @Test
     void spanArgs() {
         spanBean.spanArgs("argument");
         List<SpanData> spanItems = spanExporter.getFinishedSpanItems(1);
-        assertEquals("SpanBean.spanArgs", spanItems.get(0).getName());
-        assertEquals(INTERNAL, spanItems.get(0).getKind());
-        assertEquals("argument", spanItems.get(0).getAttributes().get(AttributeKey.stringKey("arg")));
+        SpanData span = spanItems.get(0);
+        assertEquals("SpanBean.spanArgs", span.getName());
+        assertEquals(INTERNAL, span.getKind());
+        assertEquals("argument", span.getAttributes().get(AttributeKey.stringKey("arg")));
+        assertClassMethodNames(span, SpanBean.class, "spanArgs");
     }
 
     @Test
@@ -102,9 +113,12 @@ public class WithSpanInterceptorTest {
 
         final SpanData parent = getSpanByKindAndParentId(spans, INTERNAL, "0000000000000000");
         assertEquals("SpanBean.spanChild", parent.getName());
+        assertClassMethodNames(parent, SpanBean.class, "spanChild");
 
         final SpanData child = getSpanByKindAndParentId(spans, INTERNAL, parent.getSpanId());
         assertEquals("SpanChildBean.spanChild", child.getName());
+        assertClassMethodNames(child, SpanChildBean.class, "spanChild");
+
     }
 
     @Test
@@ -115,7 +129,7 @@ public class WithSpanInterceptorTest {
         final SpanData parent = getSpanByKindAndParentId(spans, INTERNAL, "0000000000000000");
         final SpanData child = getSpanByKindAndParentId(spans, INTERNAL, parent.getSpanId());
         final SpanData client = getSpanByKindAndParentId(spans, CLIENT, child.getSpanId());
-        final SpanData server = getSpanByKindAndParentId(spans, SERVER, client.getSpanId());
+        getSpanByKindAndParentId(spans, SERVER, client.getSpanId());
     }
 
     @Test
@@ -129,12 +143,82 @@ public class WithSpanInterceptorTest {
             });
         }
         List<SpanData> spanItems = spanExporter.getFinishedSpanItems(1);
-        assertEquals("SpanBean.spanWithException", spanItems.get(0).getName());
+        SpanData span = spanItems.get(0);
+        assertEquals("SpanBean.spanWithException", span.getName());
+        assertEquals(INTERNAL, span.getKind());
+        assertEquals(ERROR, span.getStatus().getStatusCode());
+        assertEquals(1, span.getEvents().size());
+        assertEquals("spanWithException for tests",
+                ((ExceptionEventData) span.getEvents().get(0)).getException().getMessage());
+        assertClassMethodNames(span, SpanBean.class, "spanWithException");
+    }
+
+    @Test
+    void spanUni() {
+        assertEquals("hello Uni", spanBean.spanUni().await().atMost(Duration.ofSeconds(1)));
+        List<SpanData> spans = spanExporter.getFinishedSpanItems(1);
+
+        final SpanData parent = getSpanByKindAndParentId(spans, INTERNAL, "0000000000000000");
+        assertEquals("withSpanAndUni", parent.getName());
+        assertEquals(StatusCode.UNSET, parent.getStatus().getStatusCode());
+        assertClassMethodNames(parent, SpanBean.class, "spanUni");
+    }
+
+    @Test
+    void spanUniWithException() {
+        try {
+            spanBean.spanUniWithException().await().atMost(Duration.ofSeconds(1));
+            fail("Exception expected");
+        } catch (Exception e) {
+            assertThrows(RuntimeException.class, () -> {
+                throw e;
+            });
+        }
+        List<SpanData> spanItems = spanExporter.getFinishedSpanItems(1);
+        SpanData span = spanItems.get(0);
+        assertEquals("withSpanAndUni", span.getName());
+        assertEquals(INTERNAL, span.getKind());
+        assertEquals(ERROR, span.getStatus().getStatusCode());
+        assertEquals(1, span.getEvents().size());
+        assertEquals("hello Uni",
+                ((ExceptionEventData) span.getEvents().get(0)).getException().getMessage());
+        assertClassMethodNames(span, SpanBean.class, "spanUniWithException");
+    }
+
+    @Test
+    void spanMulti() {
+        assertEquals("hello Multi 2", spanBean.spanMulti().collect().last().await().atMost(Duration.ofSeconds(1)));
+        List<SpanData> spans = spanExporter.getFinishedSpanItems(1);
+
+        final SpanData parent = getSpanByKindAndParentId(spans, INTERNAL, "0000000000000000");
+        assertEquals("withSpanAndMulti", parent.getName());
+        assertEquals(StatusCode.UNSET, parent.getStatus().getStatusCode());
+        assertClassMethodNames(parent, SpanBean.class, "spanMulti");
+    }
+
+    @Test
+    void spanMultiWithException() {
+        try {
+            spanBean.spanMultiWithException().collect().last().await().atMost(Duration.ofSeconds(1));
+            fail("Exception expected");
+        } catch (Exception e) {
+            assertThrows(RuntimeException.class, () -> {
+                throw e;
+            });
+        }
+        List<SpanData> spanItems = spanExporter.getFinishedSpanItems(1);
+        assertEquals("withSpanAndMulti", spanItems.get(0).getName());
         assertEquals(INTERNAL, spanItems.get(0).getKind());
         assertEquals(ERROR, spanItems.get(0).getStatus().getStatusCode());
         assertEquals(1, spanItems.get(0).getEvents().size());
-        assertEquals("spanWithException for tests",
+        assertEquals("hello Multi",
                 ((ExceptionEventData) spanItems.get(0).getEvents().get(0)).getException().getMessage());
+        assertClassMethodNames(spanItems.get(0), SpanBean.class, "spanMultiWithException");
+    }
+
+    private void assertClassMethodNames(SpanData span, Class<?> clazz, String method) {
+        assertEquals(method, span.getAttributes().get((CODE_FUNCTION)));
+        assertEquals(clazz.getName(), span.getAttributes().get((CODE_NAMESPACE)));
     }
 
     @ApplicationScoped
@@ -179,6 +263,26 @@ public class WithSpanInterceptorTest {
         public void spanRestClient() {
             spanRestClient.spanRestClient();
         }
+
+        @WithSpan(value = "withSpanAndUni")
+        public Uni<String> spanUni() {
+            return Uni.createFrom().item("hello Uni");
+        }
+
+        @WithSpan(value = "withSpanAndUni")
+        public Uni<String> spanUniWithException() {
+            return Uni.createFrom().failure(new RuntimeException("hello Uni"));
+        }
+
+        @WithSpan(value = "withSpanAndMulti")
+        public Multi<String> spanMulti() {
+            return Multi.createFrom().items("hello Multi 1", "hello Multi 2");
+        }
+
+        @WithSpan(value = "withSpanAndMulti")
+        public Multi<String> spanMultiWithException() {
+            return Multi.createFrom().failure(new RuntimeException("hello Multi"));
+        }
     }
 
     @ApplicationScoped
@@ -196,10 +300,13 @@ public class WithSpanInterceptorTest {
 
         @WithSpan
         public void spanRestClient() {
-            WebTarget target = ClientBuilder.newClient()
-                    .target(UriBuilder.fromUri(config.getRawValue("test.url")).path("hello"));
-            Response response = target.request().get();
-            assertEquals(HTTP_OK, response.getStatus());
+            try (Client client = ClientBuilder.newClient()) {
+                WebTarget target = client.target(UriBuilder
+                        .fromUri(config.getRawValue("test.url"))
+                        .path("hello"));
+                Response response = target.request().get();
+                assertEquals(HTTP_OK, response.getStatus());
+            }
         }
     }
 

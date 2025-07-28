@@ -1,15 +1,17 @@
 import { LitElement, html, css} from 'lit';
-import {unsafeHTML} from 'lit/directives/unsafe-html.js';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { columnBodyRenderer } from '@vaadin/grid/lit.js';
-import { infoUrl } from 'build-time-data';
+import { JsonRpc } from 'jsonrpc';
 import '@vaadin/progress-bar';
-import 'qui-card';
+import '@qomponent/qui-card';
 import '@vaadin/icon';
 
 /**
  * This component shows the Info Screen
  */
 export class QwcInfo extends LitElement {
+
+    jsonRpc = new JsonRpc(this);
 
     static styles = css`
         :host {
@@ -46,19 +48,14 @@ export class QwcInfo extends LitElement {
 
     constructor() {
         super();
-        this._infoUrl = infoUrl;
         this._info = null;
     }
 
     async connectedCallback() {
         super.connectedCallback();
-        await this.load();
-    }
-
-    async load() {
-        const response = await fetch(this._infoUrl);
-        const data = await response.json();
-        this._info = data;
+        this.jsonRpc.getApplicationAndEnvironmentInfo().then(jsonRpcResponse => { 
+            this._info = jsonRpcResponse.result;
+        });
     }
 
     render() {
@@ -83,7 +80,7 @@ export class QwcInfo extends LitElement {
     _renderOsInfo(info){
         if(info.os){
             let os = info.os;
-            return html`<qui-card title="Operating System">
+            return html`<qui-card header="Operating System">
                     <div class="cardContent" slot="content">
                         ${this._renderOsIcon(os.name)}    
                         <table class="table">
@@ -99,11 +96,13 @@ export class QwcInfo extends LitElement {
     _renderJavaInfo(info){
         if(info.java){
             let java = info.java;
-            return html`<qui-card title="Java">
+            return html`<qui-card header="Java">
                     <div class="cardContent" slot="content">
                         <vaadin-icon icon="font-awesome-brands:java"></vaadin-icon>
                         <table class="table">
                             <tr><td class="row-header">Version</td><td>${java.version}</td></tr>
+                            <tr><td class="row-header">Vendor</td><td>${java.vendor}</td></tr>
+                            <tr><td class="row-header">Vendor Version</td><td>${java.vendorVersion}</td></tr>
                         </table>
                     </div>    
                 </qui-card>`;
@@ -126,7 +125,7 @@ export class QwcInfo extends LitElement {
     _renderGitInfo(info){
         if(info.git){
             let git = info.git;
-            return html`<qui-card title="Git">
+            return html`<qui-card header="Git">
                     <div class="cardContent" slot="content">
                         <vaadin-icon icon="font-awesome-brands:git"></vaadin-icon>
                         <table class="table">
@@ -151,7 +150,8 @@ export class QwcInfo extends LitElement {
     _renderOptionalData(git){
         if(typeof git.commit.id !== "string"){
             return html`<tr><td class="row-header">Commit User</td><td>${git.commit.user.name} &lt;${git.commit.user.email}&gt;</td></tr>
-                        <tr><td class="row-header">Commit Message</td><td>${unsafeHTML(this._replaceNewLine(git.commit.id.message.full))}</td></tr>`
+                        <tr><td class="row-header">Commit Message</td><td>${unsafeHTML(this._replaceNewLine(git.commit.id.message.full))}</td></tr>
+                        <tr><td class="row-header">Remote URL</td><td>${unsafeHTML(git.remote)}</td></tr>`
         }
     }
 
@@ -162,9 +162,11 @@ export class QwcInfo extends LitElement {
     _renderBuildInfo(info){
         if(info.build){
             let build = info.build;
-            return html`<qui-card title="Build">
+            return html`<qui-card header="Build">
                     <div class="cardContent" slot="content">
                         <table class="table">
+                            <tr><td class="row-header">Quarkus</td><td>${build.quarkusVersion}</td></tr>
+                            <tr><td class="row-header">App Name</td><td>${unsafeHTML(build.name)}</td></tr>
                             <tr><td class="row-header">Group</td><td>${build.group}</td></tr>
                             <tr><td class="row-header">Artifact</td><td>${build.artifact}</td></tr>
                             <tr><td class="row-header">Version</td><td>${build.version}</td></tr>
@@ -186,10 +188,15 @@ export class QwcInfo extends LitElement {
             externalConstributors.map(key => {
                     const extInfo = info[key];
                     const rows = [];
+                    let displayName = key;
                     for (const property of Object.keys(extInfo)){
-                        rows.push(html`<tr><td class="row-header">${property}</td><td>${extInfo[property]}</td></tr>`);
+                        if (property === 'displayName'){
+                            displayName = extInfo[property];
+                        }else{
+                            rows.push(html`<tr><td class="row-header">${property}</td><td>${extInfo[property]}</td></tr>`);
+                        }
                     }
-                    cards.push(html`<qui-card title=${key}>
+                    cards.push(html`<qui-card header=${displayName}>
                         <div class="cardContent" slot="content">
                             <vaadin-icon icon="font-awesome-solid:circle-info"></vaadin-icon>
                             <table class="table">

@@ -11,12 +11,13 @@ import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.qute.ResolutionContextImpl.ChildResolutionContext;
 import io.quarkus.qute.SectionHelper.SectionResolutionContext;
 
 /**
  * Section node.
  */
-class SectionNode implements TemplateNode {
+public class SectionNode implements TemplateNode {
 
     private static final Logger LOG = Logger.getLogger("io.quarkus.qute.nodeResolve");
 
@@ -30,13 +31,15 @@ class SectionNode implements TemplateNode {
     final SectionHelper helper;
     private final Origin origin;
     private final boolean traceLevel;
+    private final EngineImpl engine;
 
-    SectionNode(String name, List<SectionBlock> blocks, SectionHelper helper, Origin origin) {
+    SectionNode(String name, List<SectionBlock> blocks, SectionHelper helper, Origin origin, EngineImpl engine) {
         this.name = name;
         this.blocks = blocks;
         this.helper = helper;
         this.origin = origin;
         this.traceLevel = LOG.isTraceEnabled();
+        this.engine = engine;
     }
 
     public CompletionStage<ResultNode> resolve(ResolutionContext context, Map<String, Object> params) {
@@ -45,12 +48,12 @@ class SectionNode implements TemplateNode {
         }
         if (traceLevel && !Parser.ROOT_HELPER_NAME.equals(name)) {
             LOG.tracef("Resolve {#%s} started:%s", name, origin);
-            return helper.resolve(new SectionResolutionContextImpl(context, params)).thenApply(r -> {
+            return helper.resolve(new SectionResolutionContextImpl(context, params, engine)).thenApply(r -> {
                 LOG.tracef("Resolve {#%s} completed:%s", name, origin);
                 return r;
             });
         }
-        return helper.resolve(new SectionResolutionContextImpl(context, params));
+        return helper.resolve(new SectionResolutionContextImpl(context, params, engine));
     }
 
     @Override
@@ -58,13 +61,31 @@ class SectionNode implements TemplateNode {
         return resolve(context, null);
     }
 
+    @Override
     public Origin getOrigin() {
         return origin;
     }
 
     @Override
-    public boolean isSection() {
-        return true;
+    public Kind kind() {
+        return Kind.SECTION;
+    }
+
+    @Override
+    public SectionNode asSection() {
+        return this;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public List<SectionBlock> getBlocks() {
+        return blocks;
+    }
+
+    public SectionHelper getHelper() {
+        return helper;
     }
 
     void optimizeNodes(Set<TemplateNode> nodes) {
@@ -192,7 +213,9 @@ class SectionNode implements TemplateNode {
             }
             List<SectionBlock> blocks = builder.build();
             return new SectionNode(helperName, blocks,
-                    factory.initialize(new SectionInitContextImpl(engine, blocks, errorInitializer, currentTemlate)), origin);
+                    factory.initialize(
+                            new SectionInitContextImpl(engine, blocks, errorInitializer, currentTemlate, helperName)),
+                    origin, engine);
         }
 
     }
@@ -201,10 +224,13 @@ class SectionNode implements TemplateNode {
 
         private final Map<String, Object> params;
         private final ResolutionContext resolutionContext;
+        private final EngineImpl engine;
 
-        public SectionResolutionContextImpl(ResolutionContext resolutionContext, Map<String, Object> params) {
+        public SectionResolutionContextImpl(ResolutionContext resolutionContext, Map<String, Object> params,
+                EngineImpl engine) {
             this.resolutionContext = resolutionContext;
             this.params = params;
+            this.engine = engine;
         }
 
         @Override
@@ -218,16 +244,7 @@ class SectionNode implements TemplateNode {
                 // Use the main block
                 block = blocks.get(0);
             }
-            int size = block.nodes.size();
-            if (size == 1) {
-                // Single node in the block
-                return block.nodes.get(0).resolve(context);
-            }
-            List<CompletionStage<ResultNode>> results = new ArrayList<>(size);
-            for (TemplateNode node : block.nodes) {
-                results.add(node.resolve(context));
-            }
-            return Results.process(results);
+            return Results.resolveAndProcess(block.nodes, context, engine);
         }
 
         @Override
@@ -237,8 +254,14 @@ class SectionNode implements TemplateNode {
 
         @Override
         public ResolutionContext newResolutionContext(Object data, Map<String, SectionBlock> extendingBlocks) {
-            return new ResolutionContextImpl(data, resolutionContext.getEvaluator(), extendingBlocks,
-                    resolutionContext::getAttribute);
+            if (resolutionContext instanceof ResolutionContextImpl rc) {
+                return new ResolutionContextImpl(data, resolutionContext.getEvaluator(), extendingBlocks,
+                        rc.getTemplateInstance());
+            } else if (resolutionContext instanceof ChildResolutionContext child) {
+                return new ResolutionContextImpl(data, resolutionContext.getEvaluator(), extendingBlocks,
+                        child.getTemplateInstance());
+            }
+            throw new IllegalStateException();
         }
 
         @Override

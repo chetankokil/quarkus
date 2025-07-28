@@ -39,6 +39,7 @@ class EngineImpl implements Engine {
     final boolean removeStandaloneLines;
     private final long timeout;
     private final boolean useAsyncTimeout;
+    final TraceManagerImpl traceManager;
 
     EngineImpl(EngineBuilder builder) {
         this.sectionHelperFactories = Map.copyOf(builder.sectionHelperFactories);
@@ -55,6 +56,7 @@ class EngineImpl implements Engine {
         this.initializers = ImmutableList.copyOf(builder.initializers);
         this.timeout = builder.timeout;
         this.useAsyncTimeout = builder.useAsyncTimeout;
+        this.traceManager = builder.enableTracing ? new TraceManagerImpl() : null;
     }
 
     @Override
@@ -117,6 +119,9 @@ class EngineImpl implements Engine {
     }
 
     public Template putTemplate(String id, Template template) {
+        if (!Identifiers.isValid(id)) {
+            throw new IllegalArgumentException("Invalid identifier found: [" + id + "]");
+        }
         return templates.put(id, template);
     }
 
@@ -231,6 +236,11 @@ class EngineImpl implements Engine {
         return reader instanceof BufferedReader ? reader
                 : new BufferedReader(
                         reader);
+    }
+
+    @Override
+    public TraceManagerImpl getTraceManager() {
+        return traceManager;
     }
 
 }

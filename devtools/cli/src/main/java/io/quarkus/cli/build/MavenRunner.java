@@ -149,7 +149,7 @@ public class MavenRunner implements BuildSystemRunner {
     }
 
     @Override
-    public Integer updateProject(TargetQuarkusVersionGroup targetQuarkusVersion, RewriteGroup rewrite, boolean perModule)
+    public Integer updateProject(TargetQuarkusVersionGroup targetQuarkusVersion, RewriteGroup rewrite)
             throws Exception {
         ArrayDeque<String> args = new ArrayDeque<>();
         setMavenProperties(args, true);
@@ -167,20 +167,25 @@ public class MavenRunner implements BuildSystemRunner {
         if (targetQuarkusVersion.streamId != null) {
             args.add("-Dstream=" + targetQuarkusVersion.streamId);
         }
-        if (rewrite.noRewrite) {
-            args.add("-DnoRewrite");
-        }
         if (rewrite.pluginVersion != null) {
             args.add("-DrewritePluginVersion=" + rewrite.pluginVersion);
         }
-        if (rewrite.updateRecipesVersion != null) {
-            args.add("-DupdateRecipesVersion=" + rewrite.updateRecipesVersion);
+        if (rewrite.quarkusUpdateRecipes != null) {
+            args.add("-DquarkusUpdateRecipes=" + rewrite.quarkusUpdateRecipes);
         }
-        if (rewrite.dryRun) {
-            args.add("-DrewriteDryRun");
+        if (rewrite.additionalUpdateRecipes != null) {
+            args.add("-DadditionalUpdateRecipes=" + rewrite.additionalUpdateRecipes);
         }
-        if (perModule) {
-            args.add("-DperModule");
+        if (rewrite.run != null) {
+            if (rewrite.run.yes) {
+                args.add("-Drewrite");
+            }
+            if (rewrite.run.no) {
+                args.add("-Drewrite=false");
+            }
+            if (rewrite.run.dryRun) {
+                args.add("-DrewriteDryRun");
+            }
         }
         args.add("-ntp");
         return run(prependExecutable(args));
@@ -199,6 +204,7 @@ public class MavenRunner implements BuildSystemRunner {
 
         if (runMode.isBatchMode()) {
             args.add("-B");
+            args.add("-ntp");
         }
 
         if (buildOptions.offline) {
@@ -237,7 +243,12 @@ public class MavenRunner implements BuildSystemRunner {
         ArrayDeque<String> args = new ArrayDeque<>();
         List<String> jvmArgs = new ArrayList<>();
 
-        setMavenProperties(args, false);
+        setMavenProperties(args, commonOptions.isBatchMode());
+
+        if (commonOptions.isBatchMode()) {
+            args.add("-B");
+            args.add("-ntp");
+        }
 
         if (commonOptions.clean) {
             args.add("clean");

@@ -1,7 +1,7 @@
 package io.quarkus.oidc.token.propagation.deployment;
 
-import static io.quarkus.oidc.token.propagation.TokenPropagationConstants.JWT_PROPAGATE_TOKEN_CREDENTIAL;
-import static io.quarkus.oidc.token.propagation.TokenPropagationConstants.OIDC_PROPAGATE_TOKEN_CREDENTIAL;
+import static io.quarkus.oidc.token.propagation.common.runtime.TokenPropagationConstants.JWT_PROPAGATE_TOKEN_CREDENTIAL;
+import static io.quarkus.oidc.token.propagation.common.runtime.TokenPropagationConstants.OIDC_PROPAGATE_TOKEN_CREDENTIAL;
 
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -18,11 +18,11 @@ import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
-import io.quarkus.oidc.client.deployment.AccessTokenInstanceBuildItem;
-import io.quarkus.oidc.client.deployment.AccessTokenRequestFilterGenerator;
 import io.quarkus.oidc.token.propagation.AccessTokenRequestFilter;
 import io.quarkus.oidc.token.propagation.JsonWebToken;
 import io.quarkus.oidc.token.propagation.JsonWebTokenRequestFilter;
+import io.quarkus.oidc.token.propagation.common.deployment.AccessTokenInstanceBuildItem;
+import io.quarkus.oidc.token.propagation.common.deployment.AccessTokenRequestFilterGenerator;
 import io.quarkus.oidc.token.propagation.runtime.OidcTokenPropagationBuildTimeConfig;
 import io.quarkus.oidc.token.propagation.runtime.OidcTokenPropagationConfig;
 import io.quarkus.restclient.deployment.RestClientAnnotationProviderBuildItem;
@@ -49,12 +49,12 @@ public class OidcTokenPropagationBuildStep {
         additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(AccessTokenRequestFilter.class));
         additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(JsonWebTokenRequestFilter.class));
         reflectiveClass
-                .produce(ReflectiveClassBuildItem.builder(AccessTokenRequestFilter.class).methods().fields().build());
-        reflectiveClass
-                .produce(ReflectiveClassBuildItem.builder(JsonWebTokenRequestFilter.class).methods().fields().build());
+                .produce(ReflectiveClassBuildItem.builder(AccessTokenRequestFilter.class, JsonWebTokenRequestFilter.class)
+                        .reason(getClass().getName())
+                        .methods().fields().build());
 
-        if (config.registerFilter) {
-            Class<?> filterClass = config.jsonWebToken ? JsonWebTokenRequestFilter.class : AccessTokenRequestFilter.class;
+        if (config.registerFilter()) {
+            Class<?> filterClass = config.jsonWebToken() ? JsonWebTokenRequestFilter.class : AccessTokenRequestFilter.class;
             jaxrsProviders.produce(new ResteasyJaxrsProviderBuildItem(filterClass.getName()));
         } else {
             restAnnotationProvider.produce(new RestClientAnnotationProviderBuildItem(JWT_ACCESS_TOKEN_CREDENTIAL,
@@ -82,7 +82,8 @@ public class OidcTokenPropagationBuildStep {
         }
 
         throw new ConfigurationException(
-                "Configuration property 'quarkus.oidc-token-propagation.enabled-during-authentication' is set to " +
+                "Configuration property 'quarkus.resteasy-client-oidc-token-propagation.enabled-during-authentication' is set to "
+                        +
                         "'true', however this configuration property is only supported when either 'quarkus-oidc' or " +
                         "'quarkus-smallrye-jwt' extensions are present.");
     }
@@ -91,7 +92,7 @@ public class OidcTokenPropagationBuildStep {
         OidcTokenPropagationBuildTimeConfig config;
 
         public boolean getAsBoolean() {
-            return config.enabled;
+            return config.enabled();
         }
     }
 
@@ -99,7 +100,7 @@ public class OidcTokenPropagationBuildStep {
         OidcTokenPropagationBuildTimeConfig config;
 
         public boolean getAsBoolean() {
-            return config.enabledDuringAuthentication;
+            return config.enabledDuringAuthentication();
         }
     }
 }

@@ -53,6 +53,7 @@ import io.quarkus.redis.runtime.client.config.RedisConfig;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
+import io.quarkus.tls.deployment.spi.TlsRegistryBuildItem;
 import io.quarkus.vertx.deployment.VertxBuildItem;
 import io.vertx.redis.client.impl.types.BulkType;
 
@@ -123,11 +124,11 @@ public class RedisClientProcessor {
             BeanDiscoveryFinishedBuildItem beans,
             ShutdownContextBuildItem shutdown,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeans,
-            RedisConfig config,
             VertxBuildItem vertxBuildItem,
             ApplicationArchivesBuildItem applicationArchivesBuildItem, LaunchModeBuildItem launchMode,
             BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
-            BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles) {
+            BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles,
+            TlsRegistryBuildItem tlsRegistryBuildItem) {
 
         // Collect the used redis clients, the unused clients will not be instantiated.
         Set<String> names = new HashSet<>();
@@ -156,7 +157,7 @@ public class RedisClientProcessor {
                 .ifPresent(x -> names.addAll(configuredClientNames(buildTimeConfig, ConfigProvider.getConfig())));
 
         // Inject the creation of the client when the application starts.
-        recorder.initialize(vertxBuildItem.getVertx(), names);
+        recorder.initialize(vertxBuildItem.getVertx(), names, tlsRegistryBuildItem.registry());
 
         // Create the supplier and define the beans.
         for (String name : names) {
@@ -299,7 +300,7 @@ public class RedisClientProcessor {
             return scripts.get().stream()
                     .filter(s -> !NO_REDIS_SCRIPT_FILE.equalsIgnoreCase(s))
                     .collect(Collectors.toList());
-        } else if (launchMode == LaunchMode.NORMAL) {
+        } else if (launchMode.isProduction()) {
             return Collections.emptyList();
         } else {
             return List.of("import.redis");

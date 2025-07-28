@@ -29,6 +29,7 @@ import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
 import io.micrometer.core.instrument.binder.system.FileDescriptorMetrics;
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
 import io.micrometer.core.instrument.binder.system.UptimeMetrics;
+import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.quarkus.arc.Arc;
 import io.quarkus.micrometer.runtime.binder.HttpBinderConfiguration;
@@ -42,6 +43,8 @@ import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
+import io.quarkus.runtime.annotations.RuntimeInit;
+import io.quarkus.runtime.annotations.StaticInit;
 import io.quarkus.runtime.metrics.MetricsFactory;
 
 @Recorder
@@ -52,18 +55,33 @@ public class MicrometerRecorder {
     public static String nonApplicationUri = "/q/";
     public static String httpRootUri = "/";
 
-    /* STATIC_INIT */
-    public RuntimeValue<MeterRegistry> createRootRegistry(MicrometerConfig config, String qUri, String httpUri) {
-        factory = new MicrometerMetricsFactory(config, Metrics.globalRegistry);
-        nonApplicationUri = qUri;
-        httpRootUri = httpUri;
-        return new RuntimeValue<>(Metrics.globalRegistry);
+    private final MicrometerConfig config;
+    private final RuntimeValue<HttpServerConfig> httpServerConfig;
+    private final RuntimeValue<HttpClientConfig> httpClientConfig;
+    private final RuntimeValue<VertxConfig> vertxConfig;
+
+    public MicrometerRecorder(
+            final MicrometerConfig config,
+            final RuntimeValue<HttpServerConfig> httpServerConfig,
+            final RuntimeValue<HttpClientConfig> clientConfig,
+            final RuntimeValue<VertxConfig> vertxConfig) {
+        this.config = config;
+        this.httpServerConfig = httpServerConfig;
+        this.httpClientConfig = clientConfig;
+        this.vertxConfig = vertxConfig;
     }
 
-    /* RUNTIME_INIT */
-    public void configureRegistries(MicrometerConfig config,
-            Set<Class<? extends MeterRegistry>> registryClasses,
-            ShutdownContext context) {
+    @StaticInit
+    public RuntimeValue<MeterRegistry> createRootRegistry(String qUri, String httpUri) {
+        CompositeMeterRegistry globalRegistry = Metrics.globalRegistry;
+        factory = new MicrometerMetricsFactory(config, globalRegistry);
+        nonApplicationUri = qUri;
+        httpRootUri = httpUri;
+        return new RuntimeValue<>(globalRegistry);
+    }
+
+    @RuntimeInit
+    public void configureRegistries(Set<Class<? extends MeterRegistry>> registryClasses, ShutdownContext context) {
         BeanManager beanManager = Arc.container().beanManager();
 
         Map<Class<? extends MeterRegistry>, List<MeterFilter>> classMeterFilters = new HashMap<>(registryClasses.size());
@@ -107,20 +125,26 @@ public class MicrometerRecorder {
             }
         }
 
+        List<AutoCloseable> autoCloseables = new ArrayList<>();
+
         // Base JVM Metrics
-        if (config.checkBinderEnabledWithDefault(() -> config.binder.jvm)) {
+        if (config.checkBinderEnabledWithDefault(() -> config.binder().jvm())) {
             new ClassLoaderMetrics().bindTo(Metrics.globalRegistry);
-            new JvmHeapPressureMetrics().bindTo(Metrics.globalRegistry);
+            JvmHeapPressureMetrics jvmHeapPressureMetrics = new JvmHeapPressureMetrics();
+            jvmHeapPressureMetrics.bindTo(Metrics.globalRegistry);
+            autoCloseables.add(jvmHeapPressureMetrics);
             new JvmMemoryMetrics().bindTo(Metrics.globalRegistry);
             new JvmThreadMetrics().bindTo(Metrics.globalRegistry);
             new JVMInfoBinder().bindTo(Metrics.globalRegistry);
             if (ImageMode.current() == ImageMode.JVM) {
-                new JvmGcMetrics().bindTo(Metrics.globalRegistry);
+                JvmGcMetrics jvmGcMetrics = new JvmGcMetrics();
+                jvmGcMetrics.bindTo(Metrics.globalRegistry);
+                autoCloseables.add(jvmGcMetrics);
             }
         }
 
         // System metrics
-        if (config.checkBinderEnabledWithDefault(() -> config.binder.system)) {
+        if (config.checkBinderEnabledWithDefault(() -> config.binder().system())) {
             new UptimeMetrics().bindTo(Metrics.globalRegistry);
             new ProcessorMetrics().bindTo(Metrics.globalRegistry);
             new FileDescriptorMetrics().bindTo(Metrics.globalRegistry);
@@ -148,6 +172,14 @@ public class MicrometerRecorder {
                 for (MeterRegistry meterRegistry : new ArrayList<>(Metrics.globalRegistry.getRegistries())) {
                     meterRegistry.close();
                     Metrics.removeRegistry(meterRegistry);
+                }
+                // iterate over the auto-closeables and close them
+                for (AutoCloseable autoCloseable : autoCloseables) {
+                    try {
+                        autoCloseable.close();
+                    } catch (Exception e) {
+                        log.error("Error closing", e);
+                    }
                 }
             }
         });
@@ -249,16 +281,11 @@ public class MicrometerRecorder {
         return throwable.getCause().getClass().getSimpleName();
     }
 
-    /* RUNTIME_INIT */
-    public RuntimeValue<HttpBinderConfiguration> configureHttpMetrics(
-            boolean httpServerMetricsEnabled,
-            boolean httpClientMetricsEnabled,
-            HttpServerConfig serverConfig,
-            HttpClientConfig clientConfig,
-            VertxConfig vertxConfig) {
+    @RuntimeInit
+    public RuntimeValue<HttpBinderConfiguration> configureHttpMetrics(boolean httpServerMetricsEnabled,
+            boolean httpClientMetricsEnabled) {
         return new RuntimeValue<HttpBinderConfiguration>(
-                new HttpBinderConfiguration(httpServerMetricsEnabled,
-                        httpClientMetricsEnabled,
-                        serverConfig, clientConfig, vertxConfig));
+                new HttpBinderConfiguration(httpServerMetricsEnabled, httpClientMetricsEnabled, httpServerConfig.getValue(),
+                        httpClientConfig.getValue(), vertxConfig.getValue()));
     }
 }

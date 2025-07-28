@@ -8,7 +8,10 @@ import java.util.OptionalInt;
 import io.agroal.api.configuration.AgroalConnectionFactoryConfiguration;
 import io.agroal.api.configuration.AgroalConnectionPoolConfiguration;
 import io.quarkus.runtime.annotations.ConfigDocDefault;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
+import io.quarkus.runtime.configuration.TrimmedStringConverter;
+import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
 
@@ -18,7 +21,7 @@ public interface DataSourceJdbcRuntimeConfig {
     /**
      * The datasource URL
      */
-    Optional<String> url();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> url();
 
     /**
      * The initial size of the pool. Usually you will want to set the initial size to match at least the
@@ -115,11 +118,39 @@ public interface DataSourceJdbcRuntimeConfig {
     Optional<String> validationQuerySql();
 
     /**
+     * The timeout for the connection validation query
+     */
+    Optional<Duration> validationQueryTimeout();
+
+    /**
+     * Forces connection validation prior to acquisition (foreground validation) regardless of the idle status.
+     * <p>
+     * Because of the overhead of performing validation on every call, it’s recommended to rely on default idle validation
+     * instead, and to leave this to `false`.
+     */
+    @WithDefault("false")
+    boolean validateOnBorrow();
+
+    /**
      * Disable pooling to prevent reuse of Connections. Use this when an external pool manages the life-cycle
      * of Connections.
      */
     @WithDefault("true")
     boolean poolingEnabled();
+
+    /**
+     * Whether to enable recovery for this datasource.
+     * <p>
+     * Normally a transaction manager will call xa_recover () on an XA connection during recovery to obtain
+     * a list of transaction branches that are currently in a prepared or heuristically completed state.
+     * However, it can happen that multiple XA connections connect to the same datasource which would all
+     * return the same set of branches and for reasons of improved performance only one should be used
+     * for recover() calls. The default value for this configuration property is true because when there
+     * is only one connection it is vital for data consistency that the connection is able to report its
+     * list of prepared or heuristically completed branches.
+     */
+    @WithDefault("true")
+    boolean enableRecovery();
 
     /**
      * Require an active transaction when acquiring a connection. Recommended for production.
@@ -131,12 +162,8 @@ public interface DataSourceJdbcRuntimeConfig {
     /**
      * Other unspecified properties to be passed to the JDBC driver when creating new connections.
      */
+    @ConfigDocMapKey("property-key")
     Map<String, String> additionalJdbcProperties();
-
-    /**
-     * Enable JDBC tracing.
-     */
-    DataSourceJdbcTracingRuntimeConfig tracing();
 
     /**
      * Enable OpenTelemetry JDBC instrumentation.

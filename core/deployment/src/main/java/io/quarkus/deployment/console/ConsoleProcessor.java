@@ -5,9 +5,7 @@ import static io.quarkus.deployment.dev.testing.MessageFormat.RESET;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -18,7 +16,6 @@ import org.aesh.command.CommandDefinition;
 import org.aesh.command.CommandException;
 import org.aesh.command.CommandResult;
 import org.aesh.command.invocation.CommandInvocation;
-import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
 import io.quarkus.deployment.Capabilities;
@@ -41,7 +38,7 @@ import io.quarkus.deployment.dev.testing.TestSupport;
 import io.quarkus.deployment.ide.EffectiveIdeBuildItem;
 import io.quarkus.deployment.ide.Ide;
 import io.quarkus.dev.console.QuarkusConsole;
-import io.quarkus.runtime.console.ConsoleRuntimeConfig;
+import io.smallrye.common.process.ProcessBuilder;
 
 public class ConsoleProcessor {
 
@@ -59,29 +56,22 @@ public class ConsoleProcessor {
      */
     @BuildStep(onlyIf = IsDevelopment.class)
     @Produce(TestSetupBuildItem.class)
-    ConsoleInstalledBuildItem setupConsole(TestConfig config,
-            BuildProducer<TestListenerBuildItem> testListenerBuildItemBuildProducer,
-            LaunchModeBuildItem launchModeBuildItem, ConsoleConfig consoleConfig) {
+    ConsoleInstalledBuildItem setupConsole(
+            final TestConfig config,
+            final ConsoleConfig consoleConfig,
+            final LaunchModeBuildItem launchModeBuildItem,
+            final BuildProducer<TestListenerBuildItem> testListenerBuildItemBuildProducer) {
 
         if (consoleInstalled) {
             return ConsoleInstalledBuildItem.INSTANCE;
         }
         consoleInstalled = true;
-        if (config.console.orElse(consoleConfig.enabled)) {
-            //this is a bit of a hack, but we can't just inject this normally
-            //this is a runtime property value, but also a build time property value
-            //as when running in dev mode they are both basically equivalent
-            ConsoleRuntimeConfig consoleRuntimeConfig = new ConsoleRuntimeConfig();
-            consoleRuntimeConfig.color = ConfigProvider.getConfig().getOptionalValue("quarkus.console.color", Boolean.class);
-            io.quarkus.runtime.logging.ConsoleConfig loggingConsoleConfig = new io.quarkus.runtime.logging.ConsoleConfig();
-            loggingConsoleConfig.color = ConfigProvider.getConfig().getOptionalValue("quarkus.console.color",
-                    Boolean.class);
-            ConsoleHelper.installConsole(config, consoleConfig, consoleRuntimeConfig, loggingConsoleConfig,
-                    launchModeBuildItem.isTest());
+        if (config.console().orElse(consoleConfig.enabled())) {
+            ConsoleHelper.installConsole(config, consoleConfig, launchModeBuildItem.isTest());
             ConsoleStateManager.init(QuarkusConsole.INSTANCE, launchModeBuildItem.getDevModeType().get());
             //note that this bit needs to be refactored so it is no longer tied to continuous testing
-            if (TestSupport.instance().isEmpty() || config.continuousTesting == TestConfig.Mode.DISABLED
-                    || config.flatClassPath) {
+            if (TestSupport.instance().isEmpty() || config.continuousTesting() == TestConfig.Mode.DISABLED
+                    || config.flatClassPath()) {
                 return ConsoleInstalledBuildItem.INSTANCE;
             }
             TestConsoleHandler consoleHandler = new TestConsoleHandler(launchModeBuildItem.getDevModeType().get());
@@ -194,13 +184,8 @@ public class ConsoleProcessor {
                         log.debug("Unable to determine proper launch command for IDE: " + ide);
                         return;
                     }
-                    List<String> command = new ArrayList<>();
-                    command.add(effectiveCommand);
-                    command.addAll(args);
-                    log.debugf("Opening IDE with %s", command);
-                    new ProcessBuilder(command).redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                            .redirectError(ProcessBuilder.Redirect.DISCARD).start().waitFor(10,
-                                    TimeUnit.SECONDS);
+                    log.debugf("Opening IDE with %s %s", effectiveCommand, args);
+                    ProcessBuilder.exec(effectiveCommand, args);
                 } catch (Exception e) {
                     log.error("Failed to open IDE", e);
                 }

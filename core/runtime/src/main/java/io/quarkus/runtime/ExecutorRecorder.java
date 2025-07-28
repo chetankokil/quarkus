@@ -14,29 +14,29 @@ import org.jboss.threads.ContextHandler;
 import org.jboss.threads.EnhancedQueueExecutor;
 import org.jboss.threads.JBossExecutors;
 import org.jboss.threads.JBossThreadFactory;
-import org.wildfly.common.cpu.ProcessorInfo;
 
 import io.quarkus.runtime.annotations.Recorder;
+import io.quarkus.runtime.util.NoopShutdownScheduledExecutorService;
+import io.smallrye.common.cpu.ProcessorInfo;
 
 /**
  *
  */
 @Recorder
 public class ExecutorRecorder {
-
     private static final Logger log = Logger.getLogger("io.quarkus.thread-pool");
 
     private static volatile Executor current;
 
-    final ThreadPoolConfig threadPoolConfig;
+    private final RuntimeValue<ThreadPoolConfig> threadPoolConfig;
 
-    public ExecutorRecorder(ThreadPoolConfig threadPoolConfig) {
+    public ExecutorRecorder(RuntimeValue<ThreadPoolConfig> threadPoolConfig) {
         this.threadPoolConfig = threadPoolConfig;
     }
 
     public ScheduledExecutorService setupRunTime(ShutdownContext shutdownContext,
             LaunchMode launchMode, ThreadFactory threadFactory, ContextHandler<Object> contextHandler) {
-        final EnhancedQueueExecutor underlying = createExecutor(threadPoolConfig, threadFactory, contextHandler);
+        final EnhancedQueueExecutor underlying = createExecutor(threadPoolConfig.getValue(), threadFactory, contextHandler);
         if (launchMode == LaunchMode.DEVELOPMENT) {
             shutdownContext.addLastShutdownTask(new Runnable() {
                 @Override
@@ -51,14 +51,25 @@ public class ExecutorRecorder {
                 }
             });
         } else {
-            Runnable shutdownTask = createShutdownTask(threadPoolConfig, underlying);
+            Runnable shutdownTask = createShutdownTask(threadPoolConfig.getValue(), underlying);
             shutdownContext.addLastShutdownTask(shutdownTask);
         }
-        if (threadPoolConfig.prefill) {
+        if (threadPoolConfig.getValue().prefill()) {
             underlying.prestartAllCoreThreads();
         }
-        current = underlying;
-        return underlying;
+        ScheduledExecutorService managed = underlying;
+        // In prod and test mode, we wrap the ExecutorService and the shutdown() and shutdownNow() are deliberately not delegated
+        // This is to prevent the application and other extensions from shutting down the executor service
+        // The problem was described in https://github.com/quarkusio/quarkus/issues/16833#issuecomment-1917042589
+        // and https://github.com/quarkusio/quarkus/issues/43228
+        // For example, the Vertx instance is closed before io.quarkus.runtime.ExecutorRecorder.createShutdownTask() is used
+        // And when it's closed the underlying worker thread pool (which is in the prod mode backed by the ExecutorBuildItem) is closed as well
+        // As a result the quarkus.thread-pool.shutdown-interrupt config property and logic defined in ExecutorRecorder.createShutdownTask() is completely ignored
+        if (launchMode != LaunchMode.DEVELOPMENT) {
+            managed = new NoopShutdownScheduledExecutorService(underlying);
+        }
+        current = managed;
+        return managed;
     }
 
     private static Runnable createShutdownTask(ThreadPoolConfig threadPoolConfig, EnhancedQueueExecutor executor) {
@@ -66,12 +77,12 @@ public class ExecutorRecorder {
             @Override
             public void run() {
                 executor.shutdown();
-                final Duration shutdownTimeout = threadPoolConfig.shutdownTimeout;
-                final Optional<Duration> optionalInterval = threadPoolConfig.shutdownCheckInterval;
+                final Duration shutdownTimeout = threadPoolConfig.shutdownTimeout();
+                final Optional<Duration> optionalInterval = threadPoolConfig.shutdownCheckInterval();
                 long remaining = shutdownTimeout.toNanos();
                 final long interval = optionalInterval.orElse(Duration.ofNanos(Long.MAX_VALUE)).toNanos();
                 long intervalRemaining = interval;
-                long interruptRemaining = threadPoolConfig.shutdownInterrupt.toNanos();
+                long interruptRemaining = threadPoolConfig.shutdownInterrupt().toNanos();
 
                 long start = System.nanoTime();
                 int loop = 1;
@@ -105,8 +116,13 @@ public class ExecutorRecorder {
                                 // do some probing
                                 final int queueSize = executor.getQueueSize();
                                 final Thread[] runningThreads = executor.getRunningThreads();
-                                log.infof("Awaiting thread pool shutdown; %d thread(s) running with %d task(s) waiting",
-                                        runningThreads.length, queueSize);
+                                if (queueSize <= 0) {
+                                    log.infof("Awaiting thread pool shutdown; %d thread(s) running",
+                                            runningThreads.length);
+                                } else {
+                                    log.infof("Awaiting thread pool shutdown; %d thread(s) running with %d task(s) waiting",
+                                            runningThreads.length, queueSize);
+                                }
                                 // make sure no threads are stuck in {@code exit()}
                                 int realWaiting = runningThreads.length;
                                 for (Thread thr : runningThreads) {
@@ -126,7 +142,7 @@ public class ExecutorRecorder {
                                         }
                                     }
                                 }
-                                if (realWaiting == 0 && queueSize == 0) {
+                                if (realWaiting == 0) {
                                     // just exit
                                     executor.shutdownNow();
                                     break;
@@ -153,17 +169,20 @@ public class ExecutorRecorder {
                 .setHandoffExecutor(JBossExecutors.rejectingExecutor())
                 .setThreadFactory(JBossExecutors.resettingThreadFactory(threadFactory));
         // run time config variables
-        builder.setCorePoolSize(threadPoolConfig.coreThreads);
+        builder.setCorePoolSize(threadPoolConfig.coreThreads());
         builder.setMaximumPoolSize(getMaxSize(threadPoolConfig));
-        if (threadPoolConfig.queueSize.isPresent()) {
-            if (threadPoolConfig.queueSize.getAsInt() < 0) {
+        if (threadPoolConfig.queueSize().isPresent()) {
+            if (threadPoolConfig.queueSize().getAsInt() < 0) {
                 builder.setMaximumQueueSize(Integer.MAX_VALUE);
+                builder.setQueueLimited(false);
             } else {
-                builder.setMaximumQueueSize(threadPoolConfig.queueSize.getAsInt());
+                builder.setMaximumQueueSize(threadPoolConfig.queueSize().getAsInt());
             }
+        } else {
+            builder.setQueueLimited(false);
         }
-        builder.setGrowthResistance(threadPoolConfig.growthResistance);
-        builder.setKeepAliveTime(threadPoolConfig.keepAliveTime);
+        builder.setGrowthResistance(threadPoolConfig.growthResistance());
+        builder.setKeepAliveTime(threadPoolConfig.keepAliveTime());
 
         if (contextHandler != null) {
             builder.setContextHandler(contextHandler);
@@ -173,7 +192,7 @@ public class ExecutorRecorder {
     }
 
     public static int getMaxSize(ThreadPoolConfig threadPoolConfig) {
-        return threadPoolConfig.maxThreads.orElseGet(MaxThreadsCalculator.INSTANCE);
+        return threadPoolConfig.maxThreads().orElseGet(MaxThreadsCalculator.INSTANCE);
     }
 
     public static int calculateMaxThreads() {

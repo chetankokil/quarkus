@@ -3,8 +3,6 @@ package io.quarkus.maven.it;
 import static io.quarkus.maven.it.ApplicationNameAndVersionTestUtil.assertApplicationPropertiesSetCorrectly;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.CoreMatchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -22,9 +20,11 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,12 +36,14 @@ import java.util.zip.ZipOutputStream;
 import org.apache.commons.io.FileUtils;
 import org.apache.maven.shared.invoker.MavenInvocationException;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
 import io.quarkus.bootstrap.model.CapabilityErrors;
 import io.quarkus.devui.tests.DevUIJsonRPCTest;
+import io.quarkus.maven.dependency.ArtifactCoords;
 import io.quarkus.maven.it.continuoustesting.ContinuousTestingMavenTestUtils;
 import io.quarkus.maven.it.verifier.MavenProcessInvocationResult;
 import io.quarkus.maven.it.verifier.RunningInvoker;
@@ -70,7 +72,7 @@ public class DevMojoIT extends LaunchMojoTestBase {
     public void testFlattenedPomInTargetDir() throws MavenInvocationException, IOException {
         testDir = initProject("projects/pom-in-target-dir");
         run(true);
-        assertThat(devModeClient.getHttpResponse("/hello")).isEqualTo("Hello from RESTEasy Reactive");
+        assertThat(devModeClient.getHttpResponse("/hello")).isEqualTo("Hello from Quarkus REST");
     }
 
     @Test
@@ -369,6 +371,7 @@ public class DevMojoIT extends LaunchMojoTestBase {
 
     @Test
     public void testThatInstrumentationBasedReloadWorks() throws MavenInvocationException, IOException, Exception {
+        // Bear in mind that in the DevMojoIT context, the config seen by the DevUIJsonRPCTest (using this tests's classloader/TCCL) may not be the same as what the app under test sees
         DevUIJsonRPCTest devUIJsonRPCTest = new DevUIJsonRPCTest("devui-continuous-testing", "http://localhost:8080");
         testDir = initProject("projects/classic-inst", "projects/project-instrumentation-reload");
         runAndCheck();
@@ -510,14 +513,14 @@ public class DevMojoIT extends LaunchMojoTestBase {
         }
         Files.copy(pom.toPath(), alternatePom.toPath());
         // Now edit the pom.xml to trigger the dev mode restart
-        filter(alternatePom, Collections.singletonMap("<!-- insert test dependencies here -->",
+        filter(alternatePom, Map.of("<!-- insert test dependencies here -->",
                 "        <dependency>\n" +
                         "            <groupId>io.quarkus</groupId>\n" +
                         "            <artifactId>quarkus-smallrye-openapi</artifactId>\n" +
                         "        </dependency>"));
 
         runAndCheck();
-        assertThat(devModeClient.getHttpResponse("/q/openapi", true)).contains("Resource not found");
+        assertThat(devModeClient.getHttpResponse("/q/openapi", true)).contains("Resource Not Found");
         shutdownTheApp();
 
         runAndCheck("-f", alternatePomName);
@@ -577,6 +580,68 @@ public class DevMojoIT extends LaunchMojoTestBase {
     }
 
     @Test
+    public void testPomReload() throws MavenInvocationException, IOException {
+        testDir = initProject("projects/project-with-extension", "projects/pom-reload");
+
+        // add the extra dependency to the application module
+        filter(new File(testDir, "runner/pom.xml"), Map.of(
+                "<!-- begin comment", "<!-- begin comment -->",
+                "end comment -->", "<!-- end comment -->"));
+
+        // launch the application
+        run(false);
+
+        var localDeps = parseArtifactCoords(devModeClient.getHttpResponse("/app/hello/local-modules"));
+        assertThat(localDeps).containsExactlyInAnyOrder(
+                ArtifactCoords.jar("org.acme.extra", "acme-extra", "1.0-SNAPSHOT"),
+                ArtifactCoords.jar("org.acme", "acme-common-transitive", "1.0-SNAPSHOT"),
+                ArtifactCoords.jar("org.acme", "acme-common", "1.0-SNAPSHOT"),
+                ArtifactCoords.jar("org.acme", "acme-library", "1.0-SNAPSHOT"),
+                ArtifactCoords.jar("org.acme", "acme-quarkus-ext-deployment", "1.0-SNAPSHOT"),
+                ArtifactCoords.jar("org.acme", "acme-quarkus-ext", "1.0-SNAPSHOT"));
+
+        // remove the extra dependency from the application module
+        filter(new File(testDir, "runner/pom.xml"), Map.of(
+                "<!-- begin comment -->", "<!-- begin comment",
+                "<!-- end comment -->", "end comment -->"));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> {
+                    final String response = devModeClient.getHttpResponse("/app/hello/local-modules");
+                    System.out.println("local-modules: " + response);
+                    return !response.contains("acme-extra");
+                });
+
+        // add the extra dependency to a dependency module
+        filter(new File(testDir, "library/pom.xml"), Map.of(
+                "<!-- begin comment", "<!-- begin comment -->",
+                "end comment -->", "<!-- end comment -->"));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> {
+                    final String response = devModeClient.getHttpResponse("/app/hello/local-modules");
+                    System.out.println("local-modules: " + response);
+                    return response.contains("acme-extra");
+                });
+    }
+
+    private static Set<ArtifactCoords> parseArtifactCoords(String s) {
+        if (s.charAt(0) == '[' && s.charAt(s.length() - 1) == ']') {
+            s = s.substring(1, s.length() - 1);
+        }
+        var arr = s.split(",");
+        final Set<ArtifactCoords> result = new HashSet<>(arr.length);
+        for (var i : arr) {
+            result.add(ArtifactCoords.fromString(i.trim()));
+        }
+        return result;
+    }
+
+    @Test
     public void testRestClientCustomHeadersExtension() throws MavenInvocationException, IOException {
         testDir = getTargetDir("projects/rest-client-custom-headers-extension");
         runAndCheck();
@@ -588,6 +653,171 @@ public class DevMojoIT extends LaunchMojoTestBase {
         assertEquals(2, artifacts.size());
 
         assertThat(devModeClient.getHttpResponse("/app/frontend")).isEqualTo("CustomValue1 CustomValue2");
+    }
+
+    @Test
+    void testTestProfilesAreHandled()
+            throws MavenInvocationException, IOException {
+        // This project is a somewhat complex project with a mix of profile-d tests and plain tests, and some tests which exercise that the settings in the profile is honoured
+        testDir = initProject("projects/test-test-profile");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both class files ran
+        Assertions.assertEquals(0, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(9, results.getTestsPassed(), results.toString());
+
+        // Edit the "Hello" message.
+        File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        final String uuid = UUID.randomUUID().toString();
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get "uuid"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains(uuid));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+
+        //make sure the test is failing now, and others should have not run
+        Assertions.assertEquals(2, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(0, results.getTestsPassed(), results.toString());
+        Assertions.assertEquals(7, results.getTotalTestsPassed(), results.toString());
+
+        // Revert the change
+        filter(source, Collections.singletonMap("return \"" + uuid + "\";", "return \"hello\";"));
+
+        // Wait until we get "hello" again
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains("hello"));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+        Assertions.assertEquals(0, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(9, results.getTotalTestsPassed(), results.toString());
+    }
+
+    @Disabled("Not currently working, see https://github.com/quarkusio/quarkus/issues/46362")
+    @Test
+    void testTestProfilesWhichRunMainAreHandled()
+            throws MavenInvocationException, IOException {
+        // This project is a somewhat complex project with a mix of profile-d tests and plain tests, and some tests which exercise that the settings in the profile is honoured
+        // The difference to projects/test-test-profile is that the runMainMethod in the profile is set to true
+        testDir = initProject("projects/test-test-profile-run-main");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both class files ran
+        Assertions.assertEquals(0, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(9, results.getTestsPassed(), results.toString());
+
+        // Edit the "Hello" message.
+        File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        final String uuid = UUID.randomUUID().toString();
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get "uuid"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains(uuid));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+
+        //make sure the test is failing now, and others should have not run
+        Assertions.assertEquals(2, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(0, results.getTestsPassed(), results.toString());
+        Assertions.assertEquals(7, results.getTotalTestsPassed(), results.toString());
+
+        // Revert the change
+        filter(source, Collections.singletonMap("return \"" + uuid + "\";", "return \"hello\";"));
+
+        // Wait until we get "hello" again
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains("hello"));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+        Assertions.assertEquals(0, results.getTestsFailed(), results.toString());
+        Assertions.assertEquals(9, results.getTotalTestsPassed(), results.toString());
+    }
+
+    @Test
+    public void testThatJUnitTestTemplatesWork() throws MavenInvocationException, IOException {
+        //we also check continuous testing
+        testDir = initProject("projects/test-template", "projects/test-template-processed");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both modules run
+        Assertions.assertEquals(2, results.getTestsPassed());
+
+        // Re-running the tests when changes happen is covered by testThatChangesTriggerRerunsOfJUnitTestTemplates
+    }
+
+    @Disabled("Not working; tracked by #40770")
+    @Test
+    public void testThatChangesTriggerRerunsOfJUnitTestTemplates() throws MavenInvocationException, IOException {
+        //we also check continuous testing
+        testDir = initProject("projects/test-template", "projects/test-template-processed");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both modules run
+        Assertions.assertEquals(2, results.getTestsPassed());
+
+        // Edit the "Hello" message.
+        File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        final String uuid = UUID.randomUUID().toString();
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get "uuid"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains(uuid));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+
+        //make sure the test is failing now
+        Assertions.assertEquals(0, results.getTestsPassed());
+        Assertions.assertEquals(2, results.getTestsFailed());
     }
 
     @Test
@@ -944,37 +1174,6 @@ public class DevMojoIT extends LaunchMojoTestBase {
     }
 
     @Test
-    public void testThatNewResourcesAreServed() throws MavenInvocationException, IOException {
-        testDir = initProject("projects/classic", "projects/project-classic-run-resource-change");
-        runAndCheck();
-
-        // Create a new resource
-        File source = new File(testDir, "src/main/resources/META-INF/resources/lorem.txt");
-        FileUtils.write(source,
-                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-                "UTF-8");
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt"), containsString("Lorem ipsum"));
-
-        // Update the resource
-        String uuid = UUID.randomUUID().toString();
-        FileUtils.write(source, uuid, "UTF-8");
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt"), equalTo(uuid));
-
-        // Delete the resource
-        source.delete();
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt", 404));
-    }
-
-    @Test
     public void testThatConfigFileDeletionsAreDetected() throws MavenInvocationException, IOException {
         testDir = initProject("projects/dev-mode-file-deletion");
         runAndCheck();
@@ -1077,7 +1276,7 @@ public class DevMojoIT extends LaunchMojoTestBase {
 
     @Test
     public void testThatApplicationRecoversStartupIssue() throws MavenInvocationException, IOException {
-        testDir = initProject("projects/classic", "projects/project-classic-run-startup-issue");
+        testDir = initProject("projects/classic-resteasy", "projects/project-classic-recover-startup-issue");
 
         // Edit the JAX-RS resource to be package private
         File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
@@ -1319,6 +1518,21 @@ public class DevMojoIT extends LaunchMojoTestBase {
         assertThat(devModeClient.getHttpResponse("/app/hello/applicationName")).isEqualTo("myapp");
     }
 
+    // Candidate to move as part of https://github.com/quarkusio/quarkus/issues/46667
+    @Test
+    public void testMockitoForNonPublicInnerClass() throws MavenInvocationException, IOException {
+        // Scenario discussed in https://github.com/quarkusio/quarkus/issues/38987
+        testDir = initProject("projects/mockito-non-public-inner-class", "projects/mockito-non-public-inner-class-out");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests ran green
+        Assertions.assertEquals(0, results.getTestsFailed());
+        Assertions.assertEquals(1, results.getTestsPassed());
+    }
+
     @Test
     public void testMultiJarModuleDevModeMocks() throws MavenInvocationException, IOException {
         testDir = initProject("projects/multijar-module", "projects/multijar-module-devmode-mocks");
@@ -1470,6 +1684,27 @@ public class DevMojoIT extends LaunchMojoTestBase {
     }
 
     @Test
+    public void testResteasyReactiveExternalArtifact() throws Exception {
+        final String rootProjectPath = "projects/rr-external-artifacts";
+
+        // Set up the external project
+        final File externalJarDir = initProject(rootProjectPath + "/external-lib");
+
+        // Clean and install the external JAR in local repository (.m2)
+        install(externalJarDir, true);
+
+        // Set up the main project that uses the external dependency
+        this.testDir = initProject(rootProjectPath + "/app");
+
+        // Run quarkus:dev process
+        run(true);
+
+        Assertions.assertEquals("Quarkus", devModeClient.getHttpResponse("/hello/Quarkus"));
+        Assertions.assertEquals("OK", devModeClient.getHttpResponse("/hello/parameterized-type-external"));
+        Assertions.assertEquals("Hello from Quarkus REST", devModeClient.getHttpResponse("/greet"));
+    }
+
+    @Test
     public void testThatAptInClasspathWorks() throws MavenInvocationException, IOException {
         testDir = initProject("projects/apt-in-classpath", "projects/project-apt-in-classpath");
         run(true);
@@ -1602,5 +1837,21 @@ public class DevMojoIT extends LaunchMojoTestBase {
         assertThat(entityQuerySourceFile).doesNotExist();
         assertThat(entityMetamodelClassFile).exists();
         assertThat(entityQueryClassFile).doesNotExist();
+    }
+
+    @Test
+    void testMultimoduleFilteredClassifier()
+            throws MavenInvocationException, IOException {
+        testDir = initProject("projects/multimodule-filtered-classifier");
+        run(true);
+        assertThat(devModeClient.getHttpResponse("/")).isEqualTo("Big");
+    }
+
+    @Test
+    public void testNonParentAggregator() throws MavenInvocationException, IOException {
+        testDir = initProject("projects/non-parent-aggregator");
+        run(true, "-f", "aggregator");
+        assertThat(devModeClient.getHttpResponse("/model")).isEqualTo("Hello model");
+        assertThat(devModeClient.getHttpResponse("/service")).isEqualTo("Hello service");
     }
 }

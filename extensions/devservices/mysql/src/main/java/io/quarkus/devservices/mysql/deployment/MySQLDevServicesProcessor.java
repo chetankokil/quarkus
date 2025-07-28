@@ -3,11 +3,13 @@ package io.quarkus.devservices.mysql.deployment;
 import static io.quarkus.datasource.deployment.spi.DatabaseDefaultSetupConfig.DEFAULT_DATABASE_NAME;
 import static io.quarkus.datasource.deployment.spi.DatabaseDefaultSetupConfig.DEFAULT_DATABASE_PASSWORD;
 import static io.quarkus.datasource.deployment.spi.DatabaseDefaultSetupConfig.DEFAULT_DATABASE_USERNAME;
+import static org.testcontainers.containers.MySQLContainer.MYSQL_PORT;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 import org.testcontainers.containers.MySQLContainer;
@@ -19,9 +21,13 @@ import io.quarkus.datasource.deployment.spi.DevServicesDatasourceContainerConfig
 import io.quarkus.datasource.deployment.spi.DevServicesDatasourceProvider;
 import io.quarkus.datasource.deployment.spi.DevServicesDatasourceProviderBuildItem;
 import io.quarkus.deployment.annotations.BuildStep;
+import io.quarkus.deployment.builditem.DevServicesComposeProjectBuildItem;
 import io.quarkus.deployment.builditem.DevServicesSharedNetworkBuildItem;
+import io.quarkus.deployment.dev.devservices.DevServicesConfig;
+import io.quarkus.devservices.common.ComposeLocator;
 import io.quarkus.devservices.common.ConfigureUtil;
 import io.quarkus.devservices.common.ContainerShutdownCloseable;
+import io.quarkus.devservices.common.JBossLoggingConsumer;
 import io.quarkus.devservices.common.Labels;
 import io.quarkus.devservices.common.Volumes;
 import io.quarkus.runtime.LaunchMode;
@@ -32,53 +38,73 @@ public class MySQLDevServicesProcessor {
 
     public static final String MY_CNF_CONFIG_OVERRIDE_PARAM_NAME = "TC_MY_CNF";
 
+    private static final MySQLDatasourceServiceConfigurator configurator = new MySQLDatasourceServiceConfigurator();
+
     @BuildStep
     DevServicesDatasourceProviderBuildItem setupMysql(
-            List<DevServicesSharedNetworkBuildItem> devServicesSharedNetworkBuildItem) {
+            List<DevServicesSharedNetworkBuildItem> devServicesSharedNetworkBuildItem,
+            DevServicesComposeProjectBuildItem composeProjectBuildItem,
+            DevServicesConfig devServicesConfig) {
         return new DevServicesDatasourceProviderBuildItem(DatabaseKind.MYSQL, new DevServicesDatasourceProvider() {
             @SuppressWarnings("unchecked")
             @Override
             public RunningDevServicesDatasource startDatabase(Optional<String> username, Optional<String> password,
                     String datasourceName, DevServicesDatasourceContainerConfig containerConfig,
                     LaunchMode launchMode, Optional<Duration> startupTimeout) {
-                QuarkusMySQLContainer container = new QuarkusMySQLContainer(containerConfig.getImageName(),
-                        containerConfig.getFixedExposedPort(),
-                        !devServicesSharedNetworkBuildItem.isEmpty());
-                startupTimeout.ifPresent(container::withStartupTimeout);
+
+                boolean useSharedNetwork = DevServicesSharedNetworkBuildItem.isSharedNetworkRequired(devServicesConfig,
+                        devServicesSharedNetworkBuildItem);
 
                 String effectiveUsername = containerConfig.getUsername().orElse(username.orElse(DEFAULT_DATABASE_USERNAME));
                 String effectivePassword = containerConfig.getPassword().orElse(password.orElse(DEFAULT_DATABASE_PASSWORD));
                 String effectiveDbName = containerConfig.getDbName().orElse(
                         DataSourceUtil.isDefault(datasourceName) ? DEFAULT_DATABASE_NAME : datasourceName);
 
-                container.withUsername(effectiveUsername)
-                        .withPassword(effectivePassword)
-                        .withDatabaseName(effectiveDbName)
-                        .withReuse(containerConfig.isReuse());
-                Labels.addDataSourceLabel(container, datasourceName);
-                Volumes.addVolumes(container, containerConfig.getVolumes());
+                Supplier<RunningDevServicesDatasource> startService = () -> {
+                    QuarkusMySQLContainer container = new QuarkusMySQLContainer(containerConfig.getImageName(),
+                            containerConfig.getFixedExposedPort(),
+                            composeProjectBuildItem.getDefaultNetworkId(),
+                            useSharedNetwork);
+                    startupTimeout.ifPresent(container::withStartupTimeout);
 
-                container.withEnv(containerConfig.getContainerEnv());
+                    container.withUsername(effectiveUsername)
+                            .withPassword(effectivePassword)
+                            .withDatabaseName(effectiveDbName)
+                            .withReuse(containerConfig.isReuse());
+                    Labels.addDataSourceLabel(container, datasourceName);
+                    Volumes.addVolumes(container, containerConfig.getVolumes());
 
-                if (containerConfig.getContainerProperties().containsKey(MY_CNF_CONFIG_OVERRIDE_PARAM_NAME)) {
-                    container.withConfigurationOverride(
-                            containerConfig.getContainerProperties().get(MY_CNF_CONFIG_OVERRIDE_PARAM_NAME));
-                }
+                    container.withEnv(containerConfig.getContainerEnv());
 
-                containerConfig.getAdditionalJdbcUrlProperties().forEach(container::withUrlParam);
-                containerConfig.getCommand().ifPresent(container::setCommand);
-                containerConfig.getInitScriptPath().ifPresent(container::withInitScript);
+                    if (containerConfig.getContainerProperties().containsKey(MY_CNF_CONFIG_OVERRIDE_PARAM_NAME)) {
+                        container.withConfigurationOverride(
+                                containerConfig.getContainerProperties().get(MY_CNF_CONFIG_OVERRIDE_PARAM_NAME));
+                    }
 
-                container.start();
+                    containerConfig.getAdditionalJdbcUrlProperties().forEach(container::withUrlParam);
+                    containerConfig.getCommand().ifPresent(container::setCommand);
+                    containerConfig.getInitScriptPath().ifPresent(container::withInitScripts);
+                    if (containerConfig.isShowLogs()) {
+                        container.withLogConsumer(new JBossLoggingConsumer(LOG));
+                    }
 
-                LOG.info("Dev Services for MySQL started.");
+                    container.start();
 
-                return new RunningDevServicesDatasource(container.getContainerId(),
-                        container.getEffectiveJdbcUrl(),
-                        container.getReactiveUrl(),
-                        container.getUsername(),
-                        container.getPassword(),
-                        new ContainerShutdownCloseable(container, "MySQL"));
+                    LOG.info("Dev Services for MySQL started.");
+
+                    return new RunningDevServicesDatasource(container.getContainerId(),
+                            container.getEffectiveJdbcUrl(),
+                            container.getReactiveUrl(),
+                            container.getUsername(),
+                            container.getPassword(),
+                            new ContainerShutdownCloseable(container, "MySQL"));
+                };
+                List<String> images = List.of(
+                        containerConfig.getImageName().orElseGet(() -> ConfigureUtil.getDefaultImageNameFor("mysql")),
+                        "mysql");
+                return ComposeLocator.locateContainer(composeProjectBuildItem, images, MYSQL_PORT, launchMode, useSharedNetwork)
+                        .map(containerAddress -> configurator.composeRunningService(containerAddress, containerConfig))
+                        .orElseGet(startService);
             }
         });
     }
@@ -87,14 +113,16 @@ public class MySQLDevServicesProcessor {
         private final OptionalInt fixedExposedPort;
         private final boolean useSharedNetwork;
 
-        private String hostName = null;
+        private final String hostName;
 
-        public QuarkusMySQLContainer(Optional<String> imageName, OptionalInt fixedExposedPort, boolean useSharedNetwork) {
+        public QuarkusMySQLContainer(Optional<String> imageName, OptionalInt fixedExposedPort,
+                String defaultNetworkId, boolean useSharedNetwork) {
             super(DockerImageName
                     .parse(imageName.orElseGet(() -> ConfigureUtil.getDefaultImageNameFor("mysql")))
                     .asCompatibleSubstituteFor(DockerImageName.parse(MySQLContainer.NAME)));
             this.fixedExposedPort = fixedExposedPort;
             this.useSharedNetwork = useSharedNetwork;
+            this.hostName = ConfigureUtil.configureNetwork(this, defaultNetworkId, useSharedNetwork, "mssql");
         }
 
         @Override
@@ -102,12 +130,11 @@ public class MySQLDevServicesProcessor {
             super.configure();
 
             if (useSharedNetwork) {
-                hostName = ConfigureUtil.configureSharedNetwork(this, "mssql");
                 return;
             }
 
             if (fixedExposedPort.isPresent()) {
-                addFixedExposedPort(fixedExposedPort.getAsInt(), MySQLContainer.MYSQL_PORT);
+                addFixedExposedPort(fixedExposedPort.getAsInt(), MYSQL_PORT);
             } else {
                 addExposedPort(MYSQL_PORT);
             }

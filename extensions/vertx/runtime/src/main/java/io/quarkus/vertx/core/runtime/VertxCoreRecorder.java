@@ -8,15 +8,7 @@ import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePfxTrustOpt
 import static io.vertx.core.file.impl.FileResolverImpl.CACHE_DIR_BASE_PROP_NAME;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
@@ -30,17 +22,12 @@ import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 import org.jboss.threads.ContextHandler;
-import org.wildfly.common.cpu.ProcessorInfo;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InstanceHandle;
-import io.quarkus.runtime.ExecutorRecorder;
-import io.quarkus.runtime.IOThreadDetector;
-import io.quarkus.runtime.LaunchMode;
-import io.quarkus.runtime.ShutdownContext;
-import io.quarkus.runtime.ThreadPoolConfig;
+import io.quarkus.runtime.*;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.vertx.core.runtime.config.AddressResolverConfiguration;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
@@ -49,6 +36,8 @@ import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
 import io.quarkus.vertx.core.runtime.context.VertxContextSafetyToggle;
 import io.quarkus.vertx.mdc.provider.LateBoundMDCProvider;
 import io.quarkus.vertx.runtime.VertxCurrentContextFactory;
+import io.quarkus.vertx.runtime.jackson.QuarkusJacksonFactory;
+import io.smallrye.common.cpu.ProcessorInfo;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
@@ -67,6 +56,8 @@ import io.vertx.core.spi.resolver.ResolverProvider;
 
 @Recorder
 public class VertxCoreRecorder {
+
+    private static final String LOGGER_FACTORY_NAME_SYS_PROP = "vertx.logger-delegate-factory-class-name";
 
     static {
         System.setProperty("vertx.disableTCCL", "true");
@@ -98,21 +89,20 @@ public class VertxCoreRecorder {
      */
     private static volatile ClassLoader currentDevModeNewThreadCreationClassLoader;
 
-    public Supplier<Vertx> configureVertx(VertxConfiguration config, ThreadPoolConfig threadPoolConfig,
-            LaunchMode launchMode, ShutdownContext shutdown, List<Consumer<VertxOptions>> customizers,
-            ExecutorService executorProxy) {
-        if (launchMode == LaunchMode.NORMAL) {
-            // In prod mode, we wrap the ExecutorService and the shutdown() and shutdownNow() are deliberately not delegated
-            // This is a workaround to solve the problem described in https://github.com/quarkusio/quarkus/issues/16833#issuecomment-1917042589
-            // The Vertx instance is closed before io.quarkus.runtime.ExecutorRecorder.createShutdownTask() is used
-            // And when it's closed the underlying worker thread pool (which is in the prod mode backed by the ExecutorBuildItem) is closed as well
-            // As a result the quarkus.thread-pool.shutdown-interrupt config property and logic defined in ExecutorRecorder.createShutdownTask() is completely ignored
-            QuarkusExecutorFactory.sharedExecutor = new NoopShutdownExecutorService(executorProxy);
-        } else {
-            QuarkusExecutorFactory.sharedExecutor = executorProxy;
-        }
+    private final RuntimeValue<VertxConfiguration> vertxConfig;
+    private final RuntimeValue<ThreadPoolConfig> threadPoolConfig;
+
+    public VertxCoreRecorder(RuntimeValue<VertxConfiguration> vertxConfig, RuntimeValue<ThreadPoolConfig> threadPoolConfig) {
+        this.vertxConfig = vertxConfig;
+        this.threadPoolConfig = threadPoolConfig;
+    }
+
+    public Supplier<Vertx> configureVertx(LaunchMode launchMode, ShutdownContext shutdown,
+            List<Consumer<VertxOptions>> customizers, ExecutorService executorProxy) {
+        // The wrapper previously here to prevent the executor to be shutdown prematurely is moved to higher level to the io.quarkus.runtime.ExecutorRecorder
+        QuarkusExecutorFactory.sharedExecutor = executorProxy;
         if (launchMode != LaunchMode.DEVELOPMENT) {
-            vertx = new VertxSupplier(launchMode, config, customizers, threadPoolConfig, shutdown);
+            vertx = new VertxSupplier(launchMode, vertxConfig.getValue(), customizers, threadPoolConfig.getValue(), shutdown);
             // we need this to be part of the last shutdown tasks because closing it early (basically before Arc)
             // could cause problem to beans that rely on Vert.x and contain shutdown tasks
             shutdown.addLastShutdownTask(new Runnable() {
@@ -125,7 +115,8 @@ public class VertxCoreRecorder {
             });
         } else {
             if (vertx == null) {
-                vertx = new VertxSupplier(launchMode, config, customizers, threadPoolConfig, shutdown);
+                vertx = new VertxSupplier(launchMode, vertxConfig.getValue(), customizers, threadPoolConfig.getValue(),
+                        shutdown);
             } else if (vertx.v != null) {
                 tryCleanTccl();
             }
@@ -166,9 +157,16 @@ public class VertxCoreRecorder {
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         synchronized (devModeThreads) {
             currentDevModeNewThreadCreationClassLoader = cl;
+            // Collect terminated threads to remove them from the set. It will avoid iterating over them in the future.
+            List<Thread> terminated = new ArrayList<>();
             for (var t : devModeThreads) {
-                t.setContextClassLoader(cl);
+                if (t.getState() == Thread.State.TERMINATED) {
+                    terminated.add(t);
+                } else {
+                    t.setContextClassLoader(cl);
+                }
             }
+            terminated.forEach(devModeThreads::remove);
         }
     }
 
@@ -328,6 +326,11 @@ public class VertxCoreRecorder {
 
         String fileCacheDir = System.getProperty(CACHE_DIR_BASE_PROP_NAME);
         if (fileCacheDir == null) {
+            fileCacheDir = conf.cacheDirectory().orElse(null);
+        }
+
+        if (fileCacheDir == null) {
+            // If not set, make sure we can create a directory in the temp directory.
             File tmp = new File(System.getProperty("java.io.tmpdir", ".") + File.separator + VERTX_CACHE);
             boolean cacheDirRequired = conf.caching() || conf.classpathResolving();
             if (!tmp.isDirectory() && cacheDirRequired) {
@@ -360,6 +363,8 @@ public class VertxCoreRecorder {
                     });
                 }
             }
+        } else {
+            fileSystemOptions.setFileCacheDir(fileCacheDir);
         }
 
         options.setFileSystemOptions(fileSystemOptions);
@@ -388,8 +393,7 @@ public class VertxCoreRecorder {
     }
 
     private static File getRandomDirectory(File tmp) {
-        long random = Math.abs(UUID.randomUUID().getMostSignificantBits());
-        File cache = new File(tmp, Long.toString(random));
+        File cache = new File(tmp, Long.toString(new Random().nextLong()));
         if (cache.isDirectory()) {
             // Do not reuse an existing directory.
             return getRandomDirectory(tmp);
@@ -437,6 +441,7 @@ public class VertxCoreRecorder {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Exception when closing Vert.x instance", e);
             }
+            VertxMDC.INSTANCE.clear();
             LateBoundMDCProvider.setMDCProviderDelegate(null);
             vertx = null;
         }
@@ -503,6 +508,27 @@ public class VertxCoreRecorder {
         opts.setCacheNegativeTimeToLive(ar.cacheNegativeTimeToLive());
         opts.setMaxQueries(ar.maxQueries());
         opts.setQueryTimeout(ar.queryTimeout().toMillis());
+        opts.setHostsRefreshPeriod(ar.hostRefreshPeriod());
+        opts.setOptResourceEnabled(ar.optResourceEnabled());
+        opts.setRdFlag(ar.rdFlag());
+        opts.setNdots(ar.ndots());
+        opts.setRoundRobinInetAddress(ar.roundRobinInetAddress());
+
+        if (ar.hostsPath().isPresent()) {
+            opts.setHostsPath(ar.hostsPath().get());
+        }
+
+        if (ar.servers().isPresent()) {
+            opts.setServers(ar.servers().get());
+        }
+
+        if (ar.searchDomains().isPresent()) {
+            opts.setSearchDomains(ar.searchDomains().get());
+        }
+
+        if (ar.rotateServers().isPresent()) {
+            opts.setRotateServers(ar.rotateServers().get());
+        }
 
         options.setAddressResolverOptions(opts);
     }
@@ -526,10 +552,10 @@ public class VertxCoreRecorder {
         };
     }
 
-    public Supplier<Integer> calculateEventLoopThreads(VertxConfiguration conf) {
+    public Supplier<Integer> calculateEventLoopThreads() {
         int threads;
-        if (conf.eventLoopsPoolSize().isPresent()) {
-            threads = conf.eventLoopsPoolSize().getAsInt();
+        if (vertxConfig.getValue().eventLoopsPoolSize().isPresent()) {
+            threads = vertxConfig.getValue().eventLoopsPoolSize().getAsInt();
         } else {
             threads = calculateDefaultIOThreads();
         }
@@ -555,6 +581,15 @@ public class VertxCoreRecorder {
         };
     }
 
+    public void resetMapper(ShutdownContext shutdown) {
+        shutdown.addShutdownTask(new Runnable() {
+            @Override
+            public void run() {
+                QuarkusJacksonFactory.reset();
+            }
+        });
+    }
+
     private static void setNewThreadTccl(VertxThread thread) {
         ClassLoader cl = VertxCoreRecorder.currentDevModeNewThreadCreationClassLoader;
         if (cl == null) {
@@ -565,10 +600,22 @@ public class VertxCoreRecorder {
         thread.setContextClassLoader(cl);
     }
 
-    public ContextHandler<Object> executionContextHandler(boolean customizeArcContext) {
-        VertxCurrentContextFactory currentContextFactory = customizeArcContext
-                ? (VertxCurrentContextFactory) Arc.container().getCurrentContextFactory()
-                : null;
+    public RuntimeValue<List<String>> getIgnoredArcContextKeysSupplier() {
+        final VertxCurrentContextFactory currentContextFactory = (VertxCurrentContextFactory) Arc.container()
+                .getCurrentContextFactory();
+        return new RuntimeValue<>(currentContextFactory.keys());
+    }
+
+    public ContextHandler<Object> executionContextHandler(List<RuntimeValue<List<String>>> ignoredKeysSuppliers) {
+        final List<String> ignoredKeys;
+        if (ignoredKeysSuppliers.isEmpty()) {
+            ignoredKeys = null;
+        } else {
+            ignoredKeys = new ArrayList<>();
+            for (RuntimeValue<List<String>> ignoredKeysSupplier : ignoredKeysSuppliers) {
+                ignoredKeys.addAll(ignoredKeysSupplier.getValue());
+            }
+        }
         return new ContextHandler<Object>() {
             @Override
             public Object captureContext() {
@@ -583,14 +630,13 @@ public class VertxCoreRecorder {
                     ContextInternal vertxContext = (ContextInternal) context;
                     // The CDI contexts must not be propagated
                     // First test if VertxCurrentContextFactory is actually used
-                    if (currentContextFactory != null) {
-                        List<String> keys = currentContextFactory.keys();
+                    if (ignoredKeys != null) {
                         ConcurrentMap<Object, Object> local = vertxContext.localContextData();
-                        if (containsScopeKey(keys, local)) {
+                        if (containsIgnoredKey(ignoredKeys, local)) {
                             // Duplicate the context, copy the data, remove the request context
                             vertxContext = vertxContext.duplicate();
                             vertxContext.localContextData().putAll(local);
-                            keys.forEach(vertxContext.localContextData()::remove);
+                            ignoredKeys.forEach(vertxContext.localContextData()::remove);
                             VertxContextSafetyToggle.setContextSafe(vertxContext, true);
                         }
                     }
@@ -605,7 +651,7 @@ public class VertxCoreRecorder {
                 }
             }
 
-            private boolean containsScopeKey(List<String> keys, Map<Object, Object> localContextData) {
+            private boolean containsIgnoredKey(List<String> keys, Map<Object, Object> localContextData) {
                 if (keys.isEmpty()) {
                     return false;
                 }
@@ -627,6 +673,13 @@ public class VertxCoreRecorder {
     public static Supplier<Vertx> recoverFailedStart(VertxConfiguration config, ThreadPoolConfig threadPoolConfig) {
         return vertx = new VertxSupplier(LaunchMode.DEVELOPMENT, config, Collections.emptyList(), threadPoolConfig, null);
 
+    }
+
+    public void configureQuarkusLoggerFactory() {
+        String loggerClassName = System.getProperty(LOGGER_FACTORY_NAME_SYS_PROP);
+        if (loggerClassName == null) {
+            System.setProperty(LOGGER_FACTORY_NAME_SYS_PROP, VertxLogDelegateFactory.class.getName());
+        }
     }
 
     static class VertxSupplier implements Supplier<Vertx> {

@@ -1,7 +1,6 @@
 package io.quarkus.kotlin.deployment;
 
 import java.io.File;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -22,7 +21,6 @@ import org.jetbrains.kotlin.cli.jvm.K2JVMCompiler;
 import org.jetbrains.kotlin.config.Services;
 
 import io.quarkus.deployment.dev.CompilationProvider;
-import io.quarkus.paths.PathCollection;
 
 public class KotlinCompilationProvider implements CompilationProvider {
 
@@ -79,6 +77,8 @@ public class KotlinCompilationProvider implements CompilationProvider {
         context.getReloadableClasspath().forEach(file -> classpathJoiner.add(file.getAbsolutePath()));
 
         compilerArguments.setClasspath(classpathJoiner.toString());
+        compilerArguments.setFriendPaths(new String[] { context.getOutputDirectory().getAbsolutePath() });
+
         compilerArguments.setDestination(context.getOutputDirectory().getAbsolutePath());
         compilerArguments.setFreeArgs(filesToCompile.stream().map(File::getAbsolutePath).collect(Collectors.toList()));
 
@@ -101,12 +101,6 @@ public class KotlinCompilationProvider implements CompilationProvider {
                 throw new RuntimeException("Compilation failed. " + errors);
             }
         }
-    }
-
-    @Override
-    public Path getSourcePath(Path classFilePath, PathCollection sourcePaths, String classesPath) {
-        // return same class so it is not removed
-        return classFilePath;
     }
 
     private static class SimpleKotlinCompilerMessageCollector implements MessageCollector {

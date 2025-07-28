@@ -5,7 +5,7 @@ plugins {
 dependencies {
     implementation(libs.smallrye.config.yaml)
     implementation("io.quarkus:quarkus-analytics-common")
-
+    compileOnly(libs.kotlin.gradle.plugin.api)
     testImplementation(libs.quarkus.project.core.extension.codestarts)
 }
 
@@ -24,4 +24,10 @@ gradlePlugin {
 
 tasks.test {
   systemProperty("kotlin_version", libs.versions.kotlin.get())
+}
+
+// to generate reproducible jars
+tasks.withType<Jar>().configureEach {
+    isPreserveFileTimestamps = false 
+    isReproducibleFileOrder = true   
 }

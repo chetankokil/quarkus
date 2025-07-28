@@ -3,12 +3,11 @@ package io.quarkus.deployment.pkg.steps;
 import static io.quarkus.deployment.pkg.steps.LinuxIDUtil.getLinuxID;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.commons.lang3.RandomStringUtils;
@@ -16,6 +15,7 @@ import org.apache.commons.lang3.SystemUtils;
 import org.jboss.logging.Logger;
 
 import io.quarkus.deployment.annotations.BuildProducer;
+import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.pkg.NativeConfig;
 import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.NativeImageBuildItem;
@@ -23,44 +23,51 @@ import io.quarkus.deployment.pkg.builditem.NativeImageRunnerBuildItem;
 import io.quarkus.deployment.pkg.builditem.UpxCompressedBuildItem;
 import io.quarkus.deployment.util.ContainerRuntimeUtil;
 import io.quarkus.deployment.util.FileUtil;
-import io.quarkus.deployment.util.ProcessUtil;
+import io.smallrye.common.process.AbnormalExitException;
+import io.smallrye.common.process.ProcessBuilder;
+import io.smallrye.common.process.ProcessUtil;
 
 public class UpxCompressionBuildStep {
 
     private static final Logger log = Logger.getLogger(UpxCompressionBuildStep.class);
 
-    /**
-     * The name of the environment variable containing the system path.
-     */
-    private static final String PATH = "PATH";
-
+    @BuildStep(onlyIf = NativeBuild.class)
     public void compress(NativeConfig nativeConfig, NativeImageRunnerBuildItem nativeImageRunner,
             NativeImageBuildItem image,
             BuildProducer<UpxCompressedBuildItem> upxCompressedProducer,
             BuildProducer<ArtifactResultBuildItem> artifactResultProducer) {
-        if (nativeConfig.compression().level().isEmpty()) {
+
+        if (nativeConfig.compression().level().isEmpty() || !nativeConfig.compression().enabled()) {
             log.debug("UPX compression disabled");
+            return;
+        }
+        if (image.isReused()) {
+            log.debug("Native executable reused: skipping compression");
             return;
         }
 
         String effectiveBuilderImage = nativeConfig.builderImage().getEffectiveImage();
         Optional<File> upxPathFromSystem = getUpxFromSystem();
-        if (upxPathFromSystem.isPresent()) {
+        if (upxPathFromSystem.isPresent() && !nativeConfig.compression().containerBuild().orElse(false)
+                && nativeConfig.compression().containerImage().isEmpty()) {
             log.debug("Running UPX from system path");
             if (!runUpxFromHost(upxPathFromSystem.get(), image.getPath().toFile(), nativeConfig)) {
                 throw new IllegalStateException("Unable to compress the native executable");
             }
         } else if (nativeConfig.remoteContainerBuild()) {
-            log.errorf("Compression of native executables is not yet implemented for remote container builds.");
+            log.error("Compression of native executables is not yet implemented for remote container builds.");
             throw new IllegalStateException(
                     "Unable to compress the native executable: Compression of native executables is not yet supported for remote container builds");
-        } else if (nativeImageRunner.isContainerBuild()) {
-            log.infof("Running UPX from a container using the builder image: " + effectiveBuilderImage);
-            if (!runUpxInContainer(image, nativeConfig, effectiveBuilderImage)) {
+        } else if (nativeConfig.compression().containerBuild().orElse(true) &&
+                (nativeImageRunner.isContainerBuild() ||
+                        nativeConfig.compression().containerImage().isPresent())) {
+            String compressorImage = nativeConfig.compression().containerImage().orElse(effectiveBuilderImage);
+            log.info("Running UPX from a container using the compressor image: " + compressorImage);
+            if (!runUpxInContainer(image, nativeConfig, compressorImage)) {
                 throw new IllegalStateException("Unable to compress the native executable");
             }
         } else {
-            log.errorf("Unable to compress the native executable. Either install `upx` from https://upx.github.io/" +
+            log.error("Unable to compress the native executable. Either install `upx` from https://upx.github.io/" +
                     " on your machine, or enable in-container build using `-Dquarkus.native.container-build=true`.");
             throw new IllegalStateException("Unable to compress the native executable: `upx` not available");
         }
@@ -69,38 +76,25 @@ public class UpxCompressionBuildStep {
     }
 
     private boolean runUpxFromHost(File upx, File executable, NativeConfig nativeConfig) {
-        List<String> extraArgs = nativeConfig.compression().additionalArgs().orElse(Collections.emptyList());
-        List<String> args = Stream.of(
-                Stream.of(upx.getAbsolutePath()),
-                nativeConfig.compression().level().stream().mapToObj(this::getCompressionLevel),
-                extraArgs.stream(),
-                Stream.of(executable.getAbsolutePath()))
-                .flatMap(Function.identity())
-                .collect(Collectors.toList());
+        List<String> extraArgs = nativeConfig.compression().additionalArgs().orElse(List.of());
+        List<String> args = Stream.concat(
+                Stream.concat(
+                        nativeConfig.compression().level().stream().mapToObj(this::getCompressionLevel),
+                        extraArgs.stream()),
+                Stream.of(executable.getAbsolutePath())).toList();
         log.infof("Executing %s", String.join(" ", args));
-        final ProcessBuilder processBuilder = new ProcessBuilder(args)
-                .directory(executable.getAbsoluteFile().getParentFile())
-                .redirectOutput(ProcessBuilder.Redirect.PIPE)
-                .redirectError(ProcessBuilder.Redirect.PIPE);
-        Process process = null;
         try {
-            process = processBuilder.start();
-            ProcessUtil.streamOutputToSysOut(process);
-            final int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                log.errorf("Command: " + String.join(" ", args) + " failed with exit code " + exitCode);
-                return false;
-            }
-            return true;
+            ProcessBuilder.newBuilder(upx.getAbsolutePath())
+                    .arguments(args)
+                    .directory(executable.getAbsoluteFile().getParentFile().toPath())
+                    .output().consumeLinesWith(8192, System.out::println)
+                    .error().consumeLinesWith(8192, System.err::println)
+                    .run();
         } catch (Exception e) {
-            log.errorf("Command: " + String.join(" ", args) + " failed", e);
+            log.errorf(e, "Command %s failed", String.join(" ", args));
             return false;
-        } finally {
-            if (process != null) {
-                process.destroy();
-            }
         }
-
+        return true;
     }
 
     private boolean runUpxInContainer(NativeImageBuildItem nativeImage, NativeConfig nativeConfig,
@@ -117,7 +111,7 @@ public class UpxCompressionBuildStep {
         commandLine.add("--rm");
         commandLine.add("--entrypoint=upx");
 
-        String containerName = "upx-" + RandomStringUtils.random(5, true, false);
+        String containerName = "upx-" + RandomStringUtils.insecure().next(5, true, false);
         commandLine.add("--name");
         commandLine.add(containerName);
 
@@ -148,33 +142,22 @@ public class UpxCompressionBuildStep {
         commandLine.add(nativeImage.getPath().toFile().getName());
 
         log.infof("Compress native executable using: %s", String.join(" ", commandLine));
-        final ProcessBuilder processBuilder = new ProcessBuilder(commandLine)
-                .redirectOutput(ProcessBuilder.Redirect.PIPE)
-                .redirectError(ProcessBuilder.Redirect.PIPE);
-        Process process = null;
         try {
-            process = processBuilder.start();
-            ProcessUtil.streamOutputToSysOut(process);
-            final int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                if (exitCode == 127) {
-                    log.errorf("Command: %s failed because the builder image does not provide the `upx` executable",
-                            String.join(" ", commandLine));
-                } else {
-                    log.errorf("Command: %s failed with exit code %d", String.join(" ", commandLine), exitCode);
-                }
-                return false;
-            }
+            ProcessBuilder.newBuilder(commandLine.get(0))
+                    .arguments(commandLine.subList(1, commandLine.size()))
+                    .output().consumeLinesWith(8192, System.out::println)
+                    .error().consumeLinesWith(8192, System.err::println)
+                    .run();
             return true;
         } catch (Exception e) {
-            log.errorf("Command: " + String.join(" ", commandLine) + " failed", e);
-            return false;
-        } finally {
-            if (process != null) {
-                process.destroy();
+            if (e instanceof AbnormalExitException ae && ae.exitCode() == 127) {
+                log.errorf("Command: %s failed because the builder image does not provide the `upx` executable",
+                        String.join(" ", commandLine));
+            } else {
+                log.errorf(e, "Command: %s failed", String.join(" ", commandLine));
             }
+            return false;
         }
-
     }
 
     private String getCompressionLevel(int level) {
@@ -188,21 +171,8 @@ public class UpxCompressionBuildStep {
     }
 
     private Optional<File> getUpxFromSystem() {
-        String exec = getUpxExecutableName();
-        String systemPath = System.getenv(PATH);
-        if (systemPath != null) {
-            String[] pathDirs = systemPath.split(File.pathSeparator);
-            for (String pathDir : pathDirs) {
-                File dir = new File(pathDir);
-                if (dir.isDirectory()) {
-                    File file = new File(dir, exec);
-                    if (file.exists()) {
-                        return Optional.of(file);
-                    }
-                }
-            }
-        }
-        return Optional.empty();
+        return ProcessUtil.pathOfCommand(Path.of(getUpxExecutableName()))
+                .map(Path::toFile);
     }
 
     private static String getUpxExecutableName() {

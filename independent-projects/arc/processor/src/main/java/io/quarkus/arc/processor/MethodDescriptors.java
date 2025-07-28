@@ -22,6 +22,7 @@ import jakarta.enterprise.inject.spi.EventContext;
 import jakarta.enterprise.inject.spi.EventMetadata;
 import jakarta.interceptor.InvocationContext;
 
+import io.quarkus.arc.ActiveResult;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.ArcContainer;
 import io.quarkus.arc.ArcInvocationContext;
@@ -98,6 +99,8 @@ public final class MethodDescriptors {
             Object.class);
 
     public static final MethodDescriptor OBJECT_HASH_CODE = MethodDescriptor.ofMethod(Object.class, "hashCode", int.class);
+
+    public static final MethodDescriptor OBJECT_GET_CLASS = MethodDescriptor.ofMethod(Object.class, "getClass", Class.class);
 
     public static final MethodDescriptor OBJECT_CONSTRUCTOR = MethodDescriptor.ofConstructor(Object.class);
 
@@ -287,14 +290,11 @@ public final class MethodDescriptors {
     public static final MethodDescriptor CLIENT_PROXIES_GET_DELEGATE = MethodDescriptor.ofMethod(ClientProxies.class,
             "getDelegate", Object.class, InjectableBean.class);
 
-    public static final MethodDescriptor DECORATOR_DELEGATE_PROVIDER_SET = MethodDescriptor
-            .ofMethod(DecoratorDelegateProvider.class, "set", Object.class, Object.class);
+    public static final MethodDescriptor DECORATOR_DELEGATE_PROVIDER_GET = MethodDescriptor.ofMethod(
+            DecoratorDelegateProvider.class, "getCurrent", Object.class, CreationalContext.class);
 
-    public static final MethodDescriptor DECORATOR_DELEGATE_PROVIDER_UNSET = MethodDescriptor
-            .ofMethod(DecoratorDelegateProvider.class, "unset", void.class);
-
-    public static final MethodDescriptor DECORATOR_DELEGATE_PROVIDER_GET = MethodDescriptor
-            .ofMethod(DecoratorDelegateProvider.class, "get", Object.class);
+    public static final MethodDescriptor DECORATOR_DELEGATE_PROVIDER_SET = MethodDescriptor.ofMethod(
+            DecoratorDelegateProvider.class, "setCurrent", Object.class, CreationalContext.class, Object.class);
 
     public static final MethodDescriptor INSTANCES_LIST_OF = MethodDescriptor
             .ofMethod(Instances.class, "listOf", List.class, InjectableBean.class, Type.class, Type.class,
@@ -321,6 +321,16 @@ public final class MethodDescriptors {
 
     public static final MethodDescriptor LOCK_LOCK = MethodDescriptor.ofMethod(Lock.class, "lock", void.class);
     public static final MethodDescriptor LOCK_UNLOCK = MethodDescriptor.ofMethod(Lock.class, "unlock", void.class);
+
+    public static final MethodDescriptor ACTIVE_RESULT_VALUE = MethodDescriptor.ofMethod(ActiveResult.class,
+            "value", boolean.class);
+    public static final MethodDescriptor ACTIVE_RESULT_REASON = MethodDescriptor.ofMethod(ActiveResult.class,
+            "inactiveReason", String.class);
+    public static final MethodDescriptor ACTIVE_RESULT_CAUSE = MethodDescriptor.ofMethod(ActiveResult.class,
+            "inactiveCause", ActiveResult.class);
+
+    public static final MethodDescriptor STRING_BUILDER_APPEND = MethodDescriptor.ofMethod(StringBuilder.class,
+            "append", StringBuilder.class, String.class);
 
     private MethodDescriptors() {
     }

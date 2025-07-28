@@ -1,6 +1,6 @@
 package io.quarkus.test.junit5.virtual.internal;
 
-import static io.quarkus.test.junit5.virtual.internal.EventStreamFacade.CARRIER_PINNED_EVENT_NAME;
+import static io.quarkus.test.junit5.virtual.internal.Collector.CARRIER_PINNED_EVENT_NAME;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -131,7 +131,7 @@ public class VirtualThreadExtension
         }
 
         if (notpin != null) {
-            if (!pinEvents.isEmpty()) {
+            if (!pinEvents.isEmpty() && pinEvents.size() > notpin.atMost()) {
                 throw new AssertionError(
                         "The test " + extensionContext.getDisplayName() + " was expected to NOT pin the carrier thread"
                                 + ", but we collected " + pinEvents.size() + " event(s)\n" + dump(pinEvents));

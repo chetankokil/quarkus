@@ -2,13 +2,12 @@ package io.quarkus.datasource.deployment.devservices;
 
 import java.io.Closeable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.eclipse.microprofile.config.ConfigProvider;
@@ -25,36 +24,33 @@ import io.quarkus.datasource.runtime.DataSourceBuildTimeConfig;
 import io.quarkus.datasource.runtime.DataSourcesBuildTimeConfig;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
+import io.quarkus.deployment.builditem.DevServicesComposeProjectBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem.RunningDevService;
 import io.quarkus.deployment.builditem.DockerStatusBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.console.ConsoleInstalledBuildItem;
 import io.quarkus.deployment.console.StartupLogCompressor;
-import io.quarkus.deployment.dev.devservices.GlobalDevServicesConfig;
+import io.quarkus.deployment.dev.devservices.DevServicesConfig;
 import io.quarkus.deployment.logging.LoggingSetupBuildItem;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.configuration.ConfigUtils;
 
-@BuildSteps(onlyIfNot = IsNormal.class, onlyIf = GlobalDevServicesConfig.Enabled.class)
+@BuildSteps(onlyIf = { IsDevServicesSupportedByLaunchMode.class, DevServicesConfig.Enabled.class })
 public class DevServicesDatasourceProcessor {
 
     private static final Logger log = Logger.getLogger(DevServicesDatasourceProcessor.class);
     private static final int DOCKER_PS_ID_LENGTH = 12;
 
-    // list of devservices properties we should not check for restart
-    // see issue #30390
-    private static final Set<String> EXCLUDED_PROPERTIES = Set.of("quarkus.datasource.devservices.enabled");
-
     static volatile List<RunningDevService> databases;
 
-    static volatile Map<String, String> cachedProperties;
+    static volatile Map<String, Object> cachedProperties;
 
     static volatile boolean first = true;
 
@@ -63,6 +59,7 @@ public class DevServicesDatasourceProcessor {
             Capabilities capabilities,
             CurateOutcomeBuildItem curateOutcomeBuildItem,
             DockerStatusBuildItem dockerStatusBuildItem,
+            DevServicesComposeProjectBuildItem composeProjectBuildItem,
             List<DefaultDataSourceDbKindBuildItem> installedDrivers,
             List<DevServicesDatasourceProviderBuildItem> devDBProviders,
             DataSourcesBuildTimeConfig dataSourcesBuildTimeConfig,
@@ -72,30 +69,25 @@ public class DevServicesDatasourceProcessor {
             Optional<ConsoleInstalledBuildItem> consoleInstalledBuildItem,
             CuratedApplicationShutdownBuildItem closeBuildItem,
             LoggingSetupBuildItem loggingSetupBuildItem,
-            GlobalDevServicesConfig globalDevServicesConfig) {
+            DevServicesConfig devServicesConfig) {
         //figure out if we need to shut down and restart existing databases
         //if not and the DB's have already started we just return
         if (databases != null) {
             boolean restartRequired = false;
-            if (!restartRequired) {
-                for (Map.Entry<String, String> entry : cachedProperties.entrySet()) {
-                    if (!Objects.equals(entry.getValue(),
-                            trim(ConfigProvider.getConfig().getOptionalValue(entry.getKey(), String.class).orElse(null)))) {
-                        restartRequired = true;
-                        break;
-                    }
-                }
+            Map<String, Object> newDatasourceConfigs = buildMapFromBuildConfig(dataSourcesBuildTimeConfig);
+            if (!newDatasourceConfigs.equals(cachedProperties)) {
+                restartRequired = true;
             }
-            if (!restartRequired) {
-                //devservices properties may have been added
-                for (var name : ConfigProvider.getConfig().getPropertyNames()) {
-                    if (name.startsWith("quarkus.datasource.") && name.contains(".devservices.")
-                            && !cachedProperties.containsKey(name) && !EXCLUDED_PROPERTIES.contains(name)) {
-                        restartRequired = true;
-                        break;
-                    }
-                }
-            }
+            // check here if there are any discovered devservices that are not running
+            List<String> runningContainerIds = composeProjectBuildItem.getComposeServices().values()
+                    .stream().flatMap(Collection::stream)
+                    .map(r -> r.containerInfo().id())
+                    .toList();
+            List<RunningDevService> noLongerRunningServices = databases.stream().filter(r -> !r.isOwner())
+                    .filter(r -> !runningContainerIds.contains(r.getContainerId()))
+                    .toList();
+            restartRequired = restartRequired || !noLongerRunningServices.isEmpty();
+
             if (!restartRequired) {
                 for (RunningDevService database : databases) {
                     devServicesResultBuildItemBuildProducer.produce(database.toBuildItem());
@@ -142,8 +134,9 @@ public class DevServicesDatasourceProcessor {
             RunningDevService devService = startDevDb(entry.getKey(), capabilities, curateOutcomeBuildItem,
                     installedDrivers, dataSourcesBuildTimeConfig.hasNamedDataSources(),
                     devDBProviderMap, entry.getValue(), configHandlersByDbType, propertiesMap,
-                    dockerStatusBuildItem,
-                    launchMode.getLaunchMode(), consoleInstalledBuildItem, loggingSetupBuildItem, globalDevServicesConfig);
+                    dockerStatusBuildItem, composeProjectBuildItem,
+                    launchMode.getLaunchMode(), consoleInstalledBuildItem, loggingSetupBuildItem,
+                    devServicesConfig);
             if (devService != null) {
                 runningDevServices.add(devService);
                 results.put(entry.getKey(), toDbResult(devService));
@@ -172,18 +165,45 @@ public class DevServicesDatasourceProcessor {
             closeBuildItem.addCloseTask(closeTask, true);
         }
         databases = runningDevServices;
-        cachedProperties = propertiesMap;
+        cachedProperties = buildMapFromBuildConfig(dataSourcesBuildTimeConfig);
         for (RunningDevService database : databases) {
             devServicesResultBuildItemBuildProducer.produce(database.toBuildItem());
         }
         return new DevServicesDatasourceResultBuildItem(results);
     }
 
-    private String trim(String optional) {
-        if (optional == null) {
-            return null;
+    /**
+     * Returns a map of properties that can trigger a datasource dev service restart if modified.
+     * It builds this map from the datasource build time config.
+     */
+    private static Map<String, Object> buildMapFromBuildConfig(DataSourcesBuildTimeConfig dataSourcesBuildTimeConfig) {
+        Map<String, Object> res = new HashMap<>();
+        for (var datasource : dataSourcesBuildTimeConfig.dataSources().entrySet()) {
+            String name = datasource.getKey();
+            DataSourceBuildTimeConfig config = datasource.getValue();
+            res.put(name + ".db-kind", config.dbKind());
+            res.put(name + ".db-version", config.dbVersion());
+            res.put(name + ".devservices.command", config.devservices().command());
+            res.put(name + ".devservices.container-env", config.devservices().containerEnv());
+            res.put(name + ".devservices.container-properties.", config.devservices().containerProperties());
+            res.put(name + ".devservices.db-name", config.devservices().dbName());
+            res.put(name + ".devservices.image-name", config.devservices().imageName());
+            res.put(name + ".devservices.init-script-path", config.devservices().initScriptPath());
+            res.put(name + ".devservices.init-privileged-script-path", config.devservices().initPrivilegedScriptPath());
+            res.put(name + ".devservices.password", config.devservices().password());
+            res.put(name + ".devservices.port", config.devservices().port());
+            res.put(name + ".devservices.properties", config.devservices().properties());
+            res.put(name + ".devservices.reuse", config.devservices().reuse());
+            res.put(name + ".devservices.username", config.devservices().username());
+            res.put(name + ".devservices.volumes", config.devservices().volumes());
+            Optional<String> username = ConfigUtils.getFirstOptionalValue(
+                    DataSourceUtil.dataSourcePropertyKeys(name, "username"), String.class);
+            res.put(name + ".username", username);
+            Optional<String> password = ConfigUtils.getFirstOptionalValue(
+                    DataSourceUtil.dataSourcePropertyKeys(name, "password"), String.class);
+            res.put(name + ".password", password);
         }
-        return optional.trim();
+        return res;
     }
 
     private RunningDevService startDevDb(
@@ -196,8 +216,9 @@ public class DevServicesDatasourceProcessor {
             Map<String, List<DevServicesDatasourceConfigurationHandlerBuildItem>> configurationHandlerBuildItems,
             Map<String, String> propertiesMap,
             DockerStatusBuildItem dockerStatusBuildItem,
+            DevServicesComposeProjectBuildItem composeProjectBuildItem,
             LaunchMode launchMode, Optional<ConsoleInstalledBuildItem> consoleInstalledBuildItem,
-            LoggingSetupBuildItem loggingSetupBuildItem, GlobalDevServicesConfig globalDevServicesConfig) {
+            LoggingSetupBuildItem loggingSetupBuildItem, DevServicesConfig devServicesConfig) {
         String dataSourcePrettyName = DataSourceUtil.isDefault(dbName) ? "default datasource" : "datasource " + dbName;
 
         if (!ConfigUtils.getFirstOptionalValue(
@@ -248,9 +269,8 @@ public class DevServicesDatasourceProcessor {
             }
         }
 
-        if (devDbProvider.isDockerRequired() && !dockerStatusBuildItem.isDockerAvailable()) {
-            String message = "Please configure the datasource URL for "
-                    + dataSourcePrettyName
+        if (devDbProvider.isDockerRequired() && !dockerStatusBuildItem.isContainerRuntimeAvailable()) {
+            String message = "Please configure the datasource URL for " + dataSourcePrettyName
                     + " or ensure the Docker daemon is up and running.";
             if (launchMode == LaunchMode.TEST) {
                 throw new IllegalStateException(message);
@@ -282,8 +302,10 @@ public class DevServicesDatasourceProcessor {
                     dataSourceBuildTimeConfig.devservices().username(),
                     dataSourceBuildTimeConfig.devservices().password(),
                     dataSourceBuildTimeConfig.devservices().initScriptPath(),
+                    dataSourceBuildTimeConfig.devservices().initPrivilegedScriptPath(),
                     dataSourceBuildTimeConfig.devservices().volumes(),
-                    dataSourceBuildTimeConfig.devservices().reuse());
+                    dataSourceBuildTimeConfig.devservices().reuse(),
+                    dataSourceBuildTimeConfig.devservices().showLogs());
 
             DevServicesDatasourceProvider.RunningDevServicesDatasource datasource = devDbProvider
                     .startDatabase(
@@ -292,7 +314,7 @@ public class DevServicesDatasourceProcessor {
                             ConfigUtils.getFirstOptionalValue(DataSourceUtil.dataSourcePropertyKeys(dbName, "password"),
                                     String.class),
                             dbName, containerConfig,
-                            launchMode, globalDevServicesConfig.timeout);
+                            launchMode, devServicesConfig.timeout());
 
             for (String key : DataSourceUtil.dataSourcePropertyKeys(dbName, "db-kind")) {
                 propertiesMap.put(key, dataSourceBuildTimeConfig.dbKind().orElse(null));
@@ -316,6 +338,8 @@ public class DevServicesDatasourceProcessor {
                             e.getValue());
                 }
             }
+            setDataSourceProperties(propertiesMap, dbName, devServicesPrefix + "reuse",
+                    String.valueOf(dataSourceBuildTimeConfig.devservices().reuse()));
 
             Map<String, String> devDebProperties = new HashMap<>();
             for (DevServicesDatasourceConfigurationHandlerBuildItem devDbConfigurationHandlerBuildItem : configHandlers) {
@@ -332,19 +356,19 @@ public class DevServicesDatasourceProcessor {
                 }
             }
             setDataSourceProperties(devDebProperties, dbName, "db-kind", defaultDbKind.get());
-            if (datasource.getUsername() != null) {
-                setDataSourceProperties(devDebProperties, dbName, "username", datasource.getUsername());
+            if (datasource.username() != null) {
+                setDataSourceProperties(devDebProperties, dbName, "username", datasource.username());
             }
-            if (datasource.getPassword() != null) {
-                setDataSourceProperties(devDebProperties, dbName, "password", datasource.getPassword());
+            if (datasource.password() != null) {
+                setDataSourceProperties(devDebProperties, dbName, "password", datasource.password());
             }
             compressor.close();
-            if (datasource.getId() == null) {
+            if (datasource.id() == null) {
                 log.infof("Dev Services for %s (%s) started", dataSourcePrettyName, defaultDbKind.get());
             } else {
                 log.infof("Dev Services for %s (%s) started - container ID is %s", dataSourcePrettyName, defaultDbKind.get(),
-                        datasource.getId().length() > DOCKER_PS_ID_LENGTH ? datasource.getId().substring(0,
-                                DOCKER_PS_ID_LENGTH) : datasource.getId());
+                        datasource.id().length() > DOCKER_PS_ID_LENGTH ? datasource.id().substring(0,
+                                DOCKER_PS_ID_LENGTH) : datasource.id());
             }
 
             List<String> devservicesPrefixes = DataSourceUtil.dataSourcePropertyKeys(dbName, "devservices.");
@@ -355,7 +379,7 @@ public class DevServicesDatasourceProcessor {
                     }
                 }
             }
-            return new RunningDevService(defaultDbKind.get(), datasource.getId(), datasource.getCloseTask(), devDebProperties);
+            return new RunningDevService(defaultDbKind.get(), datasource.id(), datasource.closeTask(), devDebProperties);
         } catch (Throwable t) {
             compressor.closeAndDumpCaptured();
             throw new RuntimeException(t);

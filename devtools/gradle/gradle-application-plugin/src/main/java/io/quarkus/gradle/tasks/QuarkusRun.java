@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -32,9 +33,11 @@ import io.quarkus.bootstrap.app.AugmentAction;
 import io.quarkus.bootstrap.app.CuratedApplication;
 import io.quarkus.bootstrap.app.QuarkusBootstrap;
 import io.quarkus.bootstrap.model.ApplicationModel;
+import io.quarkus.deployment.builditem.DevServicesLauncherConfigResultBuildItem;
 import io.quarkus.deployment.cmd.RunCommandActionResultBuildItem;
-import io.quarkus.deployment.cmd.RunCommandHandler;
+import io.quarkus.deployment.cmd.StartDevServicesAndRunCommandHandler;
 import io.quarkus.gradle.extension.QuarkusPluginExtension;
+import io.smallrye.common.process.ProcessBuilder;
 
 public abstract class QuarkusRun extends QuarkusBuildTask {
     private final Property<File> workingDirectory;
@@ -47,7 +50,7 @@ public abstract class QuarkusRun extends QuarkusBuildTask {
     }
 
     public QuarkusRun(String description) {
-        super(description);
+        super(description, false);
         final ObjectFactory objectFactory = getProject().getObjects();
         mainSourceSet = getProject().getExtensions().getByType(SourceSetContainer.class)
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);
@@ -101,23 +104,24 @@ public abstract class QuarkusRun extends QuarkusBuildTask {
     public void runQuarkus() {
         ApplicationModel appModel = resolveAppModelForBuild();
         Properties sysProps = new Properties();
-        sysProps.putAll(extension().buildEffectiveConfiguration(appModel.getAppArtifact()).getValues());
+        sysProps.putAll(extension().buildEffectiveConfiguration(appModel).getOnlyQuarkusValues());
         try (CuratedApplication curatedApplication = QuarkusBootstrap.builder()
                 .setBaseClassLoader(getClass().getClassLoader())
                 .setExistingModel(appModel)
-                .setTargetDirectory(getProject().getBuildDir().toPath())
+                .setTargetDirectory(getProject().getLayout().getBuildDirectory().getAsFile().get().toPath())
                 .setBaseName(extension().finalName())
                 .setBuildSystemProperties(sysProps)
                 .setAppArtifact(appModel.getAppArtifact())
                 .setLocalProjectDiscovery(false)
                 .setIsolateDeployment(true)
+                .setMode(QuarkusBootstrap.Mode.TEST)
                 .build().bootstrap()) {
 
             AugmentAction action = curatedApplication.createAugmentor();
             AtomicReference<Boolean> exists = new AtomicReference<>();
             AtomicReference<String> tooMany = new AtomicReference<>();
             String target = System.getProperty("quarkus.run.target");
-            action.performCustomBuild(RunCommandHandler.class.getName(), new Consumer<Map<String, List>>() {
+            action.performCustomBuild(StartDevServicesAndRunCommandHandler.class.getName(), new Consumer<Map<String, List>>() {
                 @Override
                 public void accept(Map<String, List> cmds) {
                     List cmd = null;
@@ -151,22 +155,43 @@ public abstract class QuarkusRun extends QuarkusBuildTask {
                     Path wd = (Path) cmd.get(1);
                     File wdir = wd != null ? wd.toFile() : workingDirectory.get();
 
-                    try {
-                        // this was all very touchy to get the process outputing to console and exiting cleanly
-                        // change at your own risk
+                    // this was all very touchy to get the process outputing to console and exiting cleanly
+                    // change at your own risk
 
-                        // We cannot use getProject().exec() as contrl-c is not processed correctly
-                        // and the spawned process will not shutdown
-                        //
-                        // This also requires running with --no-daemon as control-c doesn't seem to trigger the shutdown hook
-                        // this poor gradle behavior is a long known issue with gradle
-                        ProcessUtil.launch(args, wdir, getProject().getLogger());
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
+                    // We cannot use getProject().exec() as contrl-c is not processed correctly
+                    // and the spawned process will not shutdown
+                    //
+                    // This also requires running with --no-daemon as control-c doesn't seem to trigger the shutdown hook
+                    // this poor gradle behavior is a long known issue with gradle
+                    ProcessBuilder.newBuilder(args.get(0))
+                            .arguments(args.subList(1, args.size()))
+                            .directory(wdir.toPath())
+                            .error().consumeLinesWith(1024, System.out::println)
+                            .output().consumeLinesWith(1024, System.out::println)
+                            .whileRunning(ph -> {
+                                if (!ph.isAlive()) {
+                                    return;
+                                }
+                                Thread hook = new Thread(() -> {
+                                    if (ph.supportsNormalTermination()) {
+                                        ph.destroy();
+                                    }
+                                    // give it some grace
+                                    ph.waitUninterruptiblyFor(5, TimeUnit.SECONDS);
+                                    // nuke it
+                                    io.smallrye.common.process.ProcessUtil.destroyAllForcibly(ph);
+                                }, "Command termination hook");
+                                Runtime.getRuntime().addShutdownHook(hook);
+                                try {
+                                    ph.waitUninterruptiblyFor();
+                                } finally {
+                                    Runtime.getRuntime().removeShutdownHook(hook);
+                                }
+                            })
+                            .run();
                 }
             },
-                    RunCommandActionResultBuildItem.class.getName());
+                    RunCommandActionResultBuildItem.class.getName(), DevServicesLauncherConfigResultBuildItem.class.getName());
             if (target != null && !exists.get()) {
                 getProject().getLogger().error("quarkus.run.target " + target + " is not found");
                 return;

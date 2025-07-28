@@ -19,11 +19,11 @@ import io.quarkus.test.QuarkusUnitTest;
 import io.quarkus.vertx.http.deployment.NonApplicationRootPathBuildItem;
 import io.quarkus.vertx.http.deployment.RouteBuildItem;
 import io.restassured.RestAssured;
+import io.smallrye.certs.Format;
+import io.smallrye.certs.junit5.Certificate;
+import io.smallrye.certs.junit5.Certificates;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
-import me.escoffier.certs.Format;
-import me.escoffier.certs.junit5.Certificate;
-import me.escoffier.certs.junit5.Certificates;
 
 @Certificates(baseDir = "target/certs", certificates = @Certificate(name = "ssl-management-interface-test", password = "secret", formats = {
         Format.JKS, Format.PKCS12, Format.PEM }))
@@ -79,7 +79,7 @@ public class ManagementWithP12Test {
     public void testSslWithP12() {
         RestAssured.given()
                 .trustStore(new File("target/certs/ssl-management-interface-test-truststore.jks"), "secret")
-                .get("https://0.0.0.0:9001/management/my-route")
+                .get("https://localhost:9001/management/my-route")
                 .then().statusCode(200).body(Matchers.equalTo("ssl"));
     }
 

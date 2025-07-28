@@ -2,7 +2,6 @@ package io.quarkus.cli.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.FileOutputStream;
@@ -32,15 +31,14 @@ class SetConfigTest {
     }
 
     @Test
-    void createConfiguration() throws Exception {
-        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "--name=foo.bar", "--value=1234");
+    void addConfiguration() throws Exception {
+        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "foo.bar", "1234");
         assertEquals(0, result.getExitCode());
-        assertTrue(result.getStdout().contains("Adding foo.bar with 1234"));
         assertEquals("1234", config().getRawValue("foo.bar"));
     }
 
     @Test
-    void updateConfiguration() throws Exception {
+    void setConfiguration() throws Exception {
         Path propertiesFile = tempDir.resolve("src/main/resources/application.properties");
         Properties properties = new Properties();
         try (InputStream inputStream = propertiesFile.toUri().toURL().openStream()) {
@@ -50,60 +48,34 @@ class SetConfigTest {
         try (FileOutputStream outputStream = new FileOutputStream(propertiesFile.toFile())) {
             properties.store(outputStream, "");
         }
-        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "--name=foo.bar", "--value=5678");
+        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "foo.bar", "5678");
         assertEquals(0, result.getExitCode());
-        assertTrue(result.getStdout().contains("Setting foo.bar to 5678"));
         assertEquals("5678", config().getRawValue("foo.bar"));
     }
 
     @Test
-    void deleteConfiguration() throws Exception {
-        Path propertiesFile = tempDir.resolve("src/main/resources/application.properties");
-        Properties properties = new Properties();
-        try (InputStream inputStream = propertiesFile.toUri().toURL().openStream()) {
-            properties.load(inputStream);
-        }
-        properties.put("foo.bar", "1234");
-        try (FileOutputStream outputStream = new FileOutputStream(propertiesFile.toFile())) {
-            properties.store(outputStream, "");
-        }
-
-        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "--name=foo.bar");
+    void addEncryptedConfiguration() throws Exception {
+        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "foo.bar", "1234", "-k");
         assertEquals(0, result.getExitCode());
-        assertTrue(result.getStdout().contains("Removing foo.bar"));
-        assertNull(config().getConfigValue("foo.bar").getValue());
-    }
-
-    @Test
-    void createEncryptedConfiguration() throws Exception {
-        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "--name=foo.bar", "--value=1234", "-k");
-        assertEquals(0, result.getExitCode());
-        assertTrue(result.getStdout().contains("Adding foo.bar"));
 
         SmallRyeConfig config = config();
-        assertEquals("aes-gcm-nopadding", config.getConfigValue("foo.bar").getExtendedExpressionHandler());
         assertEquals("1234", config.getConfigValue("foo.bar").getValue());
 
         String encryption = config.getRawValue("smallrye.config.secret-handler.aes-gcm-nopadding.encryption-key");
         assertNotNull(encryption);
 
-        result = CliDriver.execute(tempDir, "config", "set", "--name=foo.baz", "--value=5678", "-k");
+        result = CliDriver.execute(tempDir, "config", "set", "foo.baz", "5678", "-k");
         assertEquals(0, result.getExitCode());
-        assertTrue(result.getStdout().contains("Adding foo.baz"));
 
         config = config();
 
-        assertEquals("aes-gcm-nopadding", config.getConfigValue("foo.bar").getExtendedExpressionHandler());
         assertEquals("1234", config.getConfigValue("foo.bar").getValue());
         assertTrue(config.isPropertyPresent("foo.baz"));
-
-        // TODO - radcortez - Requires update in SmallRye Config
-        //assertEquals("aes-gcm-nopadding", config.getConfigValue("foo.baz").getExtendedExpressionHandler());
-        //assertEquals("5678", config.getConfigValue("foo.baz").getValue());
+        assertEquals("5678", config.getConfigValue("foo.baz").getValue());
     }
 
     @Test
-    void updateEncryptedConfiguration() throws Exception {
+    void setEncryptedConfiguration() throws Exception {
         Path propertiesFile = tempDir.resolve("src/main/resources/application.properties");
         Properties properties = new Properties();
         try (InputStream inputStream = propertiesFile.toUri().toURL().openStream()) {
@@ -114,18 +86,16 @@ class SetConfigTest {
             properties.store(outputStream, "");
         }
 
-        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "--name=foo.bar", "-k");
+        CliDriver.Result result = CliDriver.execute(tempDir, "config", "set", "foo.bar", "-k");
         assertEquals(0, result.getExitCode());
 
         SmallRyeConfig config = config();
-        assertEquals("aes-gcm-nopadding", config.getConfigValue("foo.bar").getExtendedExpressionHandler());
         assertEquals("1234", config.getConfigValue("foo.bar").getValue());
     }
 
     private SmallRyeConfig config() throws Exception {
-        final PropertiesConfigSource propertiesConfigSource = new PropertiesConfigSource(
+        PropertiesConfigSource propertiesConfigSource = new PropertiesConfigSource(
                 tempDir.resolve("src/main/resources/application.properties").toUri().toURL());
-        System.out.println(propertiesConfigSource.getProperties());
         return new SmallRyeConfigBuilder()
                 .addDefaultInterceptors()
                 .addDiscoveredSecretKeysHandlers()

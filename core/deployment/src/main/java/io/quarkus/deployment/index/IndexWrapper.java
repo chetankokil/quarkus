@@ -1,5 +1,7 @@
 package io.quarkus.deployment.index;
 
+import static io.quarkus.commons.classloading.ClassLoaderHelper.fromClassNameToResourceName;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Modifier;
@@ -170,6 +172,35 @@ public class IndexWrapper implements IndexView {
     }
 
     @Override
+    public Collection<ClassInfo> getKnownDirectImplementations(DotName interfaceName) {
+        if (additionalClasses.isEmpty()) {
+            return index.getKnownDirectImplementations(interfaceName);
+        }
+        Set<ClassInfo> directImplementations = new HashSet<>(index.getKnownDirectImplementations(interfaceName));
+        for (Optional<ClassInfo> additional : additionalClasses.values()) {
+            if (additional.isEmpty()) {
+                continue;
+            }
+            ClassInfo additionalClass = additional.get();
+            if (additionalClass.isInterface()) {
+                continue;
+            }
+            for (Type interfaceType : additionalClass.interfaceTypes()) {
+                if (interfaceName.equals(interfaceType.name())) {
+                    directImplementations.add(additionalClass);
+                    break;
+                }
+            }
+        }
+        return directImplementations;
+    }
+
+    @Override
+    public Collection<ClassInfo> getAllKnownImplementations(DotName interfaceName) {
+        return getAllKnownImplementors(interfaceName);
+    }
+
+    @Override
     public Collection<ClassInfo> getKnownDirectImplementors(DotName className) {
         if (additionalClasses.isEmpty()) {
             return index.getKnownDirectImplementors(className);
@@ -313,7 +344,7 @@ public class IndexWrapper implements IndexView {
             return false;
         }
         try (InputStream stream = classLoader
-                .getResourceAsStream(className.replace('.', '/') + ".class")) {
+                .getResourceAsStream(fromClassNameToResourceName(className))) {
             if (stream != null) {
                 indexer.index(stream);
                 result = true;

@@ -1,5 +1,7 @@
 package io.quarkus.deployment;
 
+import static io.quarkus.commons.classloading.ClassLoaderHelper.fromClassNameToResourceName;
+
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -225,7 +227,8 @@ public class CodeGenerator {
         if (previouslyRecordedProperties.isEmpty()) {
             try {
                 readConfig(appModel, mode, buildSystemProps, deploymentClassLoader, configReader -> {
-                    var config = configReader.initConfiguration(mode, buildSystemProps, appModel.getPlatformProperties());
+                    var config = configReader.initConfiguration(buildSystemProps, new Properties(),
+                            appModel.getPlatformProperties());
                     final Map<String, String> allProps = new HashMap<>();
                     for (String name : config.getPropertyNames()) {
                         allProps.put(name, ConfigTrackingValueTransformer.asString(config.getConfigValue(name)));
@@ -285,7 +288,8 @@ public class CodeGenerator {
     public static Config getConfig(ApplicationModel appModel, LaunchMode launchMode, Properties buildSystemProps,
             QuarkusClassLoader deploymentClassLoader) throws CodeGenException {
         return readConfig(appModel, launchMode, buildSystemProps, deploymentClassLoader,
-                configReader -> configReader.initConfiguration(launchMode, buildSystemProps, appModel.getPlatformProperties()));
+                configReader -> configReader.initConfiguration(buildSystemProps, new Properties(),
+                        appModel.getPlatformProperties()));
     }
 
     public static <T> T readConfig(ApplicationModel appModel, LaunchMode launchMode, Properties buildSystemProps,
@@ -338,7 +342,7 @@ public class CodeGenerator {
             final QuarkusClassLoader.Builder configClBuilder = QuarkusClassLoader.builder("CodeGenerator Config ClassLoader",
                     deploymentClassLoader, false);
             if (!allowedConfigServices.isEmpty()) {
-                configClBuilder.addElement(new MemoryClassPathElement(allowedConfigServices, true));
+                configClBuilder.addNormalPriorityElement(new MemoryClassPathElement(allowedConfigServices, true));
             }
             if (!bannedConfigServices.isEmpty()) {
                 configClBuilder.addBannedElement(new MemoryClassPathElement(bannedConfigServices, true));
@@ -381,7 +385,7 @@ public class CodeGenerator {
                                 .map(String::trim)
                                 // skip comments and empty lines
                                 .filter(line -> !line.startsWith("#") && !line.isEmpty())
-                                .filter(className -> classLoader.getResource(className.replace('.', '/') + ".class") == null)
+                                .filter(className -> classLoader.getResource(fromClassNameToResourceName(className)) == null)
                                 .forEach(unavailableList::add);
                     } catch (IOException e) {
                         throw new UncheckedIOException("Failed to read " + serviceFile, e);

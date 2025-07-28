@@ -27,7 +27,8 @@ We'll do that using a single Quarkus annotation.
 [NOTE]
 ====
 In this guide, we use the default Quarkus Cache backend (Caffeine).
-You can use Redis instead.
+You can use Infinispan or Redis instead.
+Refer to the xref:cache-infinispan-reference.adoc[Infinispan cache backend reference] to configure the Infinispan backend.
 Refer to the xref:cache-redis-reference.adoc[Redis cache backend reference] to configure the Redis backend.
 ====
 
@@ -45,10 +46,10 @@ The solution is located in the `cache-quickstart` link:{quickstarts-tree-url}/ca
 First, we need to create a new Quarkus project with the following command:
 
 :create-app-artifact-id: cache-quickstart
-:create-app-extensions: cache,resteasy-reactive-jackson
+:create-app-extensions: cache,rest-jackson
 include::{includes}/devtools/create-app.adoc[]
 
-This command generates the project and imports the `cache` and `resteasy-reactive-jackson` extensions.
+This command generates the project and imports the `cache` and `rest-jackson` extensions.
 
 If you already have your Quarkus project configured, you can add the `cache` extension
 to your project by running the following command in your project base directory:
@@ -394,7 +395,7 @@ The class must either represent a CDI bean or declare a public no-args construct
 If it represents a CDI bean, then the key generator will be injected during the cache key computation.
 Otherwise, a new instance of the key generator will be created using its default constructor for each cache key computation.
 
-In case of CDI, there must be exactly one bean that has the class in its set of bean types, otherwise the build fails. 
+In case of CDI, there must be exactly one bean that has the class in its set of bean types, otherwise the build fails.
 The context associated with the scope of the bean must be active when the `CacheKeyGenerator#generate()` method is invoked.
 If the scope is `@Dependent` then the bean instance is destroyed when the `CacheKeyGenerator#generate()` method completes.
 
@@ -746,7 +747,7 @@ properties in the `application.properties` file. By default, caches do not perfo
 You need to replace `cache-name` in all the following properties with the real name of the cache you want to configure.
 ====
 
-include::{generated-dir}/config/quarkus-cache-cache-config.adoc[opts=optional, leveloffset=+1]
+include::{generated-dir}/config/quarkus-cache.adoc[opts=optional, leveloffset=+1]
 
 Here's what your cache configuration could look like:
 
@@ -1075,3 +1076,4 @@ When you encounter this error, you can easily fix it by adding the following ann
 <1> It is an array, so you can register several cache implementations in one go if your configuration requires several of them.
 
 This annotation will register the cache implementation classes for reflection and this will include the classes into the native executable.
+More details about the `@RegisterForReflection` annotation can be found on  the xref:writing-native-applications-tips.adoc#registerForReflection[native application tips] page.

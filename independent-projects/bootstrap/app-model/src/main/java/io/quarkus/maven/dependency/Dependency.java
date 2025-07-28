@@ -8,15 +8,15 @@ public interface Dependency extends ArtifactCoords {
     String SCOPE_COMPILE = "compile";
     String SCOPE_IMPORT = "import";
 
-    public static Dependency of(String groupId, String artifactId) {
+    static Dependency of(String groupId, String artifactId) {
         return new ArtifactDependency(groupId, artifactId, null, ArtifactCoords.TYPE_JAR, null);
     }
 
-    public static Dependency of(String groupId, String artifactId, String version) {
+    static Dependency of(String groupId, String artifactId, String version) {
         return new ArtifactDependency(groupId, artifactId, null, ArtifactCoords.TYPE_JAR, version);
     }
 
-    public static Dependency pomImport(String groupId, String artifactId, String version) {
+    static Dependency pomImport(String groupId, String artifactId, String version) {
         return new ArtifactDependency(groupId, artifactId, null, ArtifactCoords.TYPE_POM, version, SCOPE_IMPORT, false);
     }
 
@@ -62,12 +62,25 @@ public interface Dependency extends ArtifactCoords {
 
     /**
      * Checks whether a dependency has a given flag set.
+     * If the value of the {@code flag} argument combines multiple flags,
+     * the implementation will return {@code true} only if the dependency
+     * has all the flags set.
      *
-     * @param flag flag to check
+     * @param flag flag (or flags) to check
      * @return true if the flag is set, otherwise false
      */
     default boolean isFlagSet(int flag) {
         return (getFlags() & flag) == flag;
+    }
+
+    /**
+     * Checks whether a dependency has any of the flags combined in the value of {@code flags} set.
+     *
+     * @param flags flags to check
+     * @return true, if any of the flags is set, otherwise - false
+     */
+    default boolean isAnyFlagSet(int flags) {
+        return (getFlags() & flags) > 0;
     }
 
     /**

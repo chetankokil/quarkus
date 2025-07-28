@@ -20,10 +20,17 @@ package io.quarkus.vertx.http.runtime.security;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
-import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
+
+import jakarta.inject.Inject;
+
+import org.eclipse.microprofile.config.ConfigProvider;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.quarkus.security.credential.CertificateCredential;
@@ -31,16 +38,41 @@ import io.quarkus.security.identity.IdentityProviderManager;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.request.AuthenticationRequest;
 import io.quarkus.security.identity.request.CertificateAuthenticationRequest;
+import io.quarkus.tls.TlsConfiguration;
+import io.quarkus.vertx.http.security.MTLS;
 import io.smallrye.mutiny.Uni;
+import io.vertx.core.http.ClientAuth;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.ext.web.RoutingContext;
 
 /**
- * The authentication handler responsible for mTLS client authentication
+ * The authentication handler responsible for mTLS client authentication.
  */
-public class MtlsAuthenticationMechanism implements HttpAuthenticationMechanism {
-    private static final String ROLES_ATTRIBUTE = "roles";
-    Map<String, Set<String>> roles = Map.of();
+public final class MtlsAuthenticationMechanism implements HttpAuthenticationMechanism {
+    public static final int INCLUSIVE_AUTHENTICATION_PRIORITY = 3000;
+    private static final String ROLES_MAPPER_ATTRIBUTE = "roles_mapper";
+    private final boolean inclusiveAuthentication;
+    private final ClientAuth tlsClientAuth;
+    private final Optional<String> httpServerTlsConfigName;
+    private final TlsConfiguration initialTlsConfiguration;
+    private Function<X509Certificate, Set<String>> certificateToRoles = null;
+
+    @Inject
+    MtlsAuthenticationMechanism(@ConfigProperty(name = "quarkus.http.auth.inclusive") boolean inclusiveAuthentication) {
+        this.inclusiveAuthentication = inclusiveAuthentication;
+        this.tlsClientAuth = null;
+        this.httpServerTlsConfigName = Optional.empty();
+        this.initialTlsConfiguration = null;
+    }
+
+    public MtlsAuthenticationMechanism(MTLS.Builder.MTLSConfig mtlsConfig) {
+        Objects.requireNonNull(mtlsConfig);
+        this.certificateToRoles = mtlsConfig.certificateToRoles;
+        this.tlsClientAuth = Objects.requireNonNull(mtlsConfig.tlsClientAuth);
+        this.httpServerTlsConfigName = Objects.requireNonNull(mtlsConfig.httpServerTlsConfigName);
+        this.initialTlsConfiguration = mtlsConfig.initialTlsConfiguration;
+        this.inclusiveAuthentication = ConfigProvider.getConfig().getValue("quarkus.http.auth.inclusive", boolean.class);
+    }
 
     @Override
     public Uni<SecurityIdentity> authenticate(RoutingContext context,
@@ -61,8 +93,8 @@ public class MtlsAuthenticationMechanism implements HttpAuthenticationMechanism 
         context.put(HttpAuthenticationMechanism.class.getName(), this);
 
         AuthenticationRequest authRequest = new CertificateAuthenticationRequest(
-                new CertificateCredential(X509Certificate.class.cast(certificate)));
-        authRequest.setAttribute(ROLES_ATTRIBUTE, roles);
+                new CertificateCredential((X509Certificate) certificate));
+        authRequest.setAttribute(ROLES_MAPPER_ATTRIBUTE, certificateToRoles);
         return identityProviderManager
                 .authenticate(HttpSecurityUtils.setRoutingContextAttribute(authRequest, context));
     }
@@ -83,7 +115,28 @@ public class MtlsAuthenticationMechanism implements HttpAuthenticationMechanism 
         return Uni.createFrom().item(new HttpCredentialTransport(HttpCredentialTransport.Type.X509, "X509"));
     }
 
-    void setRoleMappings(Map<String, Set<String>> roles) {
-        this.roles = Collections.unmodifiableMap(roles);
+    @Override
+    public int getPriority() {
+        return inclusiveAuthentication ? INCLUSIVE_AUTHENTICATION_PRIORITY : DEFAULT_PRIORITY;
+    }
+
+    ClientAuth getTlsClientAuth() {
+        return tlsClientAuth;
+    }
+
+    void setCertificateToRolesMapper(Function<X509Certificate, Set<String>> certificateToRoles) {
+        this.certificateToRoles = certificateToRoles;
+    }
+
+    boolean isCertificateToRolesMapperSet() {
+        return certificateToRoles != null;
+    }
+
+    Optional<String> getHttpServerTlsConfigName() {
+        return httpServerTlsConfigName;
+    }
+
+    TlsConfiguration getInitialTlsConfiguration() {
+        return initialTlsConfiguration;
     }
 }

@@ -15,7 +15,7 @@
     <name>Quarkus - Integration Tests - OpenTelemetry SPI</name>
 
     <properties>
-        <opentelemetry-aws-xray-propagator.version>1.32.0-alpha</opentelemetry-aws-xray-propagator.version>
+        <opentelemetry-aws-xray-propagator.version>1.43.0-alpha</opentelemetry-aws-xray-propagator.version>
     </properties>
 
 
@@ -132,7 +132,7 @@
             </activation>
 
             <properties>
-                <quarkus.package.type>native</quarkus.package.type>
+                <quarkus.native.enabled>true</quarkus.native.enabled>
             </properties>
 
             <build>

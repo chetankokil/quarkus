@@ -37,46 +37,40 @@
 
     <properties>
         <angus-activation.version>1.0.0</angus-activation.version>
-        <expressly.version>5.0.0</expressly.version>
         <jakarta.json-api.version>2.1.3</jakarta.json-api.version>
         <jakarta.ws.rs-api.version>3.1.0</jakarta.ws.rs-api.version>
-        <jakarta.xml.bind-api.version>4.0.1</jakarta.xml.bind-api.version>
-        <parsson.version>1.1.5</parsson.version>
+        <jakarta.xml.bind-api.version>4.0.2</jakarta.xml.bind-api.version>
+        <parsson.version>1.1.7</parsson.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Versions -->
-        <jakarta.enterprise.cdi-api.version>4.0.1</jakarta.enterprise.cdi-api.version>
-        <jandex.version>3.1.6</jandex.version>
-        <bytebuddy.version>1.14.11</bytebuddy.version>
-        <junit5.version>5.10.2</junit5.version>
-        <maven.version>3.9.6</maven.version>
-        <assertj.version>3.25.3</assertj.version>
-        <jboss-logging.version>3.5.3.Final</jboss-logging.version>
-        <jboss-logmanager.version>3.0.4.Final</jboss-logmanager.version>
-        <jakarta.annotation-api.version>2.1.1</jakarta.annotation-api.version>
-        <gizmo.version>1.8.0</gizmo.version>
+        <jakarta.enterprise.cdi-api.version>4.1.0</jakarta.enterprise.cdi-api.version>
+        <jandex.version>3.4.0</jandex.version>
+        <bytebuddy.version>1.15.11</bytebuddy.version>
+        <junit5.version>5.13.4</junit5.version>
+        <maven.version>3.9.9</maven.version>
+        <assertj.version>3.27.3</assertj.version>
+        <jboss-logging.version>3.6.1.Final</jboss-logging.version>
+        <jboss-logmanager.version>3.1.2.Final</jboss-logmanager.version>
+        <jakarta.annotation-api.version>3.0.0</jakarta.annotation-api.version>
+        <gizmo.version>1.9.0</gizmo.version>
         <jakarta.persistence-api.version>3.1.0</jakarta.persistence-api.version>
 
-        <version.compiler.plugin>3.12.1</version.compiler.plugin>
-        <version.enforcer.plugin>3.2.1</version.enforcer.plugin>
-        <version.surefire.plugin>3.2.5</version.surefire.plugin>
-        <mutiny.version>2.5.7</mutiny.version>
-        <smallrye-common.version>2.3.0</smallrye-common.version>
-        <vertx.version>4.5.3</vertx.version>
-        <rest-assured.version>5.4.0</rest-assured.version>
+        <mutiny.version>2.9.4</mutiny.version>
+        <smallrye-common.version>2.13.7</smallrye-common.version>
+        <vertx.version>4.5.16</vertx.version>
+        <rest-assured.version>5.5.5</rest-assured.version>
         <commons-logging-jboss-logging.version>1.0.0.Final</commons-logging-jboss-logging.version>
-        <jackson-bom.version>2.16.1</jackson-bom.version>
-        <smallrye-stork.version>2.4.0</smallrye-stork.version>
+        <jackson-bom.version>2.19.2</jackson-bom.version>
+        <smallrye-stork.version>2.7.3</smallrye-stork.version>
         <jakarta.validation-api.version>3.0.2</jakarta.validation-api.version>
-        <yasson.version>3.0.3</yasson.version>
-        <jakarta.json.bind-api.version>3.0.0</jakarta.json.bind-api.version>
-        <awaitility.version>4.2.0</awaitility.version>
-        <smallrye-mutiny-vertx-core.version>3.9.0</smallrye-mutiny-vertx-core.version>
+        <yasson.version>3.0.4</yasson.version>
+        <jakarta.json.bind-api.version>3.0.1</jakarta.json.bind-api.version>
+        <awaitility.version>4.3.0</awaitility.version>
+        <smallrye-mutiny-vertx-core.version>3.19.2</smallrye-mutiny-vertx-core.version>
         <reactive-streams.version>1.0.4</reactive-streams.version>
-        <mockito.version>5.10.0</mockito.version>
-        <mutiny-zero.version>1.0.0</mutiny-zero.version>
-
-        <!-- Forbidden API checks -->
-        <forbiddenapis-maven-plugin.version>3.4</forbiddenapis-maven-plugin.version>
+        <mockito.version>5.18.0</mockito.version>
+        <wiremock.version>3.13.1</wiremock.version>
+        <mutiny-zero.version>1.1.1</mutiny-zero.version>
     </properties>
 
     <modules>
@@ -94,6 +88,15 @@
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson-bom.version}</version>
+                <scope>import</scope>
+                <type>pom</type>
+            </dependency>
+
+            <!-- Mockito dependencies, imported as a BOM -->
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-bom</artifactId>
+                <version>${mockito.version}</version>
                 <scope>import</scope>
                 <type>pom</type>
             </dependency>
@@ -132,6 +135,12 @@
             <dependency>
                 <groupId>io.quarkus.resteasy.reactive</groupId>
                 <artifactId>resteasy-reactive-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.quarkus.vertx.utils</groupId>
+                <artifactId>quarkus-vertx-utils</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -228,9 +237,12 @@
 
             <dependency>
                 <groupId>io.smallrye.reactive</groupId>
-                <artifactId>mutiny</artifactId>
+                <artifactId>mutiny-bom</artifactId>
                 <version>${mutiny.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
+
             <dependency>
                 <groupId>io.smallrye.reactive</groupId>
                 <artifactId>mutiny-zero-flow-adapters</artifactId>
@@ -335,6 +347,13 @@
             </dependency>
 
             <dependency>
+                <groupId>org.wiremock</groupId>
+                <artifactId>wiremock-standalone</artifactId>
+                <version>${wiremock.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
                 <groupId>io.rest-assured</groupId>
                 <artifactId>rest-assured</artifactId>
                 <version>${rest-assured.version}</version>
@@ -399,7 +418,6 @@
             <plugins>
                 <plugin>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version>${version.compiler.plugin}</version>
                     <configuration>
                         <parameters>true</parameters>
                     </configuration>
@@ -424,6 +442,7 @@
                     <executions>
                         <execution>
                             <id>enforce</id>
+                            <phase>${maven-enforcer-plugin.phase}</phase>
                             <configuration>
                                 <rules>
                                     <dependencyConvergence/>
@@ -446,45 +465,12 @@
                 </plugin>
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>${version.surefire.plugin}</version>
                     <configuration>
                         <!-- combine.self suppresses warnings about java.io.tmpdir being defined twice -->
                         <systemPropertyVariables combine.self="override"/>
                         <!-- set tmpdir as early as possible because failsafe sets it too late for JDK16 -->
                         <argLine>-Djava.io.tmpdir="${project.build.directory}"</argLine>
                         <excludedEnvironmentVariables>MAVEN_OPTS</excludedEnvironmentVariables>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>net.revelc.code.formatter</groupId>
-                    <artifactId>formatter-maven-plugin</artifactId>
-                    <version>2.23.0</version>
-                    <dependencies>
-                        <dependency>
-                            <artifactId>quarkus-ide-config</artifactId>
-                            <groupId>io.quarkus</groupId>
-                            <version>${project.version}</version>
-                        </dependency>
-                      </dependencies>
-                    <configuration>
-                        <!-- store outside of target to speed up formatting when mvn clean is used -->
-                        <cachedir>.cache/formatter-maven-plugin-${formatter-maven-plugin.version}</cachedir>
-                        <configFile>eclipse-format.xml</configFile>
-                        <lineEnding>LF</lineEnding>
-                        <skip>${format.skip}</skip>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>net.revelc.code</groupId>
-                    <artifactId>impsort-maven-plugin</artifactId>
-                    <version>1.9.0</version>
-                    <configuration>
-                        <!-- store outside of target to speed up formatting when mvn clean is used -->
-                        <cachedir>.cache/impsort-maven-plugin-${impsort-maven-plugin.version}</cachedir>
-                        <groups>java.,javax.,jakarta.,org.,com.</groups>
-                        <staticGroups>*</staticGroups>
-                        <skip>${format.skip}</skip>
-                        <removeUnused>true</removeUnused>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -513,7 +499,6 @@
                 <plugin>
                     <groupId>de.thetaphi</groupId>
                     <artifactId>forbiddenapis</artifactId>
-                    <version>${forbiddenapis-maven-plugin.version}</version>
                     <executions>
                         <execution>
                             <id>verify-forbidden-apis</id>
@@ -536,17 +521,6 @@
             </plugins>
         </pluginManagement>
     </build>
-
-    <distributionManagement>
-        <snapshotRepository>
-            <id>sonatype-nexus-snapshots</id>
-            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
-        </snapshotRepository>
-        <repository>
-            <id>sonatype-nexus-releases</id>
-            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
-        </repository>
-    </distributionManagement>
 
     <profiles>
         <profile>

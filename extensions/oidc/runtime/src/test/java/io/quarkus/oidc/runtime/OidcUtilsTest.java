@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.security.Permission;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -26,12 +25,31 @@ import org.junit.jupiter.api.Test;
 
 import io.quarkus.oidc.OIDCException;
 import io.quarkus.oidc.OidcTenantConfig;
+import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.smallrye.jwt.build.Jwt;
 import io.vertx.core.http.Cookie;
 import io.vertx.core.http.impl.CookieImpl;
 import io.vertx.core.json.JsonObject;
 
 public class OidcUtilsTest {
+
+    @Test
+    public void getRoorPath() throws Exception {
+
+        assertEquals("", OidcUtils.getRootPath("/"));
+        assertEquals("/root", OidcUtils.getRootPath("/root"));
+        assertEquals("/root", OidcUtils.getRootPath("root"));
+        assertEquals("/root", OidcUtils.getRootPath("/root/"));
+    }
+
+    @Test
+    public void testDpopScheme() throws Exception {
+
+        assertTrue(OidcUtils.isDPoPScheme("DPoP"));
+        assertTrue(OidcUtils.isDPoPScheme("dpop"));
+        assertFalse(OidcUtils.isDPoPScheme("pop"));
+
+    }
 
     @Test
     public void testGetSingleSessionCookie() throws Exception {
@@ -241,43 +259,32 @@ public class OidcUtilsTest {
     public void testTokenIsOpaque() throws Exception {
         assertTrue(OidcUtils.isOpaqueToken("123"));
         assertTrue(OidcUtils.isOpaqueToken("1.23"));
-        assertFalse(OidcUtils.isOpaqueToken("1.2.3"));
+        assertTrue(OidcUtils.isOpaqueToken("1.2.3"));
+        assertFalse(OidcUtils.isOpaqueToken(jwt()));
     }
 
     @Test
     public void testDecodeOpaqueTokenAsJwt() throws Exception {
-        assertNull(OidcUtils.decodeJwtContent("123"));
-        assertNull(OidcUtils.decodeJwtContent("1.23"));
-        assertNull(OidcUtils.decodeJwtContent("1.2.3"));
+        assertNull(OidcCommonUtils.decodeJwtContent("123"));
+        assertNull(OidcCommonUtils.decodeJwtContent("1.23"));
+        assertNull(OidcCommonUtils.decodeJwtContent("1.2.3"));
     }
 
     @Test
     public void testDecodeJwt() throws Exception {
-        final byte[] keyBytes = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
-                .getBytes(StandardCharsets.UTF_8);
-        SecretKey key = new SecretKeySpec(keyBytes, 0, keyBytes.length, "HMACSHA256");
-        String jwt = Jwt.claims().sign(key);
-        assertNull(OidcUtils.decodeJwtContent(jwt + ".4"));
-        JsonObject json = OidcUtils.decodeJwtContent(jwt);
+        String jwt = jwt();
+        assertNull(OidcCommonUtils.decodeJwtContent(jwt + ".4"));
+        JsonObject json = OidcCommonUtils.decodeJwtContent(jwt);
         assertTrue(json.containsKey("iat"));
         assertTrue(json.containsKey("exp"));
         assertTrue(json.containsKey("jti"));
     }
 
-    @Test
-    public void testTransformScopeToPermission() throws Exception {
-        Permission[] perms = OidcUtils.transformScopesToPermissions(
-                List.of("read", "read:d", "read:", ":read"));
-        assertEquals(4, perms.length);
-
-        assertEquals("read", perms[0].getName());
-        assertNull(perms[0].getActions());
-        assertEquals("read", perms[1].getName());
-        assertEquals("d", perms[1].getActions());
-        assertEquals("read:", perms[2].getName());
-        assertNull(perms[2].getActions());
-        assertEquals(":read", perms[3].getName());
-        assertNull(perms[3].getActions());
+    private static String jwt() {
+        final byte[] keyBytes = "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
+                .getBytes(StandardCharsets.UTF_8);
+        SecretKey key = new SecretKeySpec(keyBytes, 0, keyBytes.length, "HMACSHA256");
+        return Jwt.claims().sign(key);
     }
 
     @Test
@@ -310,10 +317,42 @@ public class OidcUtilsTest {
         assertEquals("openid%2Ca%3A1%2Cb%3A2%2Cc%2Cd", OidcUtils.encodeScopes(config));
     }
 
+    @Test
+    public void testSessionCookieCheck() throws Exception {
+        assertTrue(OidcUtils.isSessionCookie(OidcUtils.SESSION_COOKIE_NAME));
+        assertTrue(OidcUtils.isSessionCookie(OidcUtils.SESSION_COOKIE_NAME + "_tenant1"));
+        assertFalse(OidcUtils.isSessionCookie(OidcUtils.SESSION_AT_COOKIE_NAME));
+        assertFalse(OidcUtils.isSessionCookie(OidcUtils.SESSION_AT_COOKIE_NAME + "_tenant1"));
+        assertFalse(OidcUtils.isSessionCookie(OidcUtils.SESSION_RT_COOKIE_NAME));
+        assertFalse(OidcUtils.isSessionCookie(OidcUtils.SESSION_RT_COOKIE_NAME + "_tenant1"));
+
+        assertFalse(OidcUtils.isSessionCookie(OidcUtils.SESSION_AT_COOKIE_NAME + "1"));
+    }
+
+    @Test
+    public void testGetSessionCookieTenantId() throws Exception {
+        assertEquals(OidcUtils.DEFAULT_TENANT_ID,
+                OidcUtils.getTenantIdFromCookie(OidcUtils.SESSION_COOKIE_NAME, "q_session", true));
+        assertEquals(OidcUtils.DEFAULT_TENANT_ID,
+                OidcUtils.getTenantIdFromCookie(OidcUtils.SESSION_COOKIE_NAME, "q_session_chunk_1", true));
+        assertEquals("a", OidcUtils.getTenantIdFromCookie(OidcUtils.SESSION_COOKIE_NAME, "q_session_a", true));
+        assertEquals("a", OidcUtils.getTenantIdFromCookie(OidcUtils.SESSION_COOKIE_NAME, "q_session_a_chunk_1", true));
+    }
+
     public static JsonObject read(InputStream input) throws IOException {
         try (BufferedReader buffer = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             return new JsonObject(buffer.lines().collect(Collectors.joining("\n")));
         }
     }
 
+    @Test
+    public void testJwtContentTypeCheck() {
+        assertTrue(OidcUtils.isApplicationJwtContentType("application/jwt"));
+        assertTrue(OidcUtils.isApplicationJwtContentType(" application/jwt "));
+        assertTrue(OidcUtils.isApplicationJwtContentType("application/jwt;charset=UTF-8"));
+        assertTrue(OidcUtils.isApplicationJwtContentType(" application/jwt ; charset=UTF-8"));
+        assertFalse(OidcUtils.isApplicationJwtContentType(" application/jwt-custom"));
+        assertFalse(OidcUtils.isApplicationJwtContentType(" application/json"));
+        assertFalse(OidcUtils.isApplicationJwtContentType(null));
+    }
 }

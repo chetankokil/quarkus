@@ -31,12 +31,12 @@ public class RenameConfigTest {
 
     @Test
     void rename() {
-        assertEquals("1234", renameConfig.prop);
+        assertEquals("1234", renameConfig.prop());
         assertEquals("1234", config.getRawValue("quarkus.rename.prop"));
 
-        assertEquals("only-in-new", renameConfig.onlyInNew);
-        assertEquals("only-in-old", renameConfig.onlyInOld);
-        assertEquals("new", renameConfig.inBoth);
+        assertEquals("only-in-new", renameConfig.onlyInNew());
+        assertEquals("only-in-old", renameConfig.onlyInOld());
+        assertEquals("new", renameConfig.inBoth());
 
         // This will always return values. It lookups on "rename" first and "rename-old" next
         assertEquals("only-in-new", config.getRawValue("quarkus.rename.only-in-new"));
@@ -49,7 +49,7 @@ public class RenameConfigTest {
 
         assertEquals("old-default", config.getRawValue("quarkus.rename.with-default"));
         assertEquals("old-default", config.getRawValue("quarkus.rename-old.with-default"));
-        assertEquals("old-default", renameConfig.withDefault);
+        assertEquals("old-default", renameConfig.withDefault());
 
         // Make sure we only record the actual properties in the sources (and not renamed properties)
         Optional<ConfigSource> configSource = config.getConfigSource("BuildTime RunTime Fixed");
@@ -59,7 +59,7 @@ public class RenameConfigTest {
         // In Build time source
         assertNotNull(buildTimeRunTimeDefaults.getValue("quarkus.rename.prop"));
         assertNotNull(buildTimeRunTimeDefaults.getValue("quarkus.rename.only-in-new"));
-        assertNotNull(buildTimeRunTimeDefaults.getValue("quarkus.rename-old.only-in-old"));
+        assertNotNull(buildTimeRunTimeDefaults.getValue("quarkus.rename.only-in-old"));
         assertNotNull(buildTimeRunTimeDefaults.getValue("quarkus.rename.in-both"));
         // When in both only the one that has priority (remamed) is recorded
         assertNull(buildTimeRunTimeDefaults.getValue("quarkus.rename-old.in-both"));
@@ -68,7 +68,7 @@ public class RenameConfigTest {
         assertNotNull(config.getRawValue("quarkus.rename-old.prop"));
         assertNull(buildTimeRunTimeDefaults.getValue("quarkus.rename-old.only-in-new"));
         assertNotNull(config.getRawValue("quarkus.rename-old.only-in-new"));
-        assertNull(buildTimeRunTimeDefaults.getValue("quarkus.rename.only-in-old"));
-        assertNotNull(config.getRawValue("quarkus.rename.only-in-old"));
+        assertNull(buildTimeRunTimeDefaults.getValue("quarkus.rename-old.only-in-old"));
+        assertNotNull(config.getRawValue("quarkus.rename-old.only-in-old"));
     }
 }

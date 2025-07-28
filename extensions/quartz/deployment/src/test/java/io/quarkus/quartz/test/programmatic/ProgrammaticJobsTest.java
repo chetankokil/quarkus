@@ -18,6 +18,9 @@ import jakarta.inject.Singleton;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.quartz.JobDetail;
+import org.quartz.JobKey;
+import org.quartz.SchedulerException;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.Unremovable;
@@ -37,6 +40,9 @@ public class ProgrammaticJobsTest {
     static final QuarkusUnitTest test = new QuarkusUnitTest()
             .withApplicationRoot((jar) -> jar
                     .addClasses(Jobs.class));
+
+    @Inject
+    org.quartz.Scheduler quartzScheduler;
 
     @Inject
     Scheduler scheduler;
@@ -63,7 +69,7 @@ public class ProgrammaticJobsTest {
                 .setSkipPredicate(AlwaysSkipPredicate.class)
                 .schedule();
 
-        Scheduler.JobDefinition job1 = scheduler.newJob("foo")
+        Scheduler.JobDefinition<?> job1 = scheduler.newJob("foo")
                 .setInterval("1s")
                 .setTask(ec -> {
                     assertTrue(Arc.container().requestContext().isActive());
@@ -73,7 +79,7 @@ public class ProgrammaticJobsTest {
         assertEquals("Sync task was already set",
                 assertThrows(IllegalStateException.class, () -> job1.setAsyncTask(ec -> null)).getMessage());
 
-        Scheduler.JobDefinition job2 = scheduler.newJob("foo").setCron("0/5 * * * * ?");
+        Scheduler.JobDefinition<?> job2 = scheduler.newJob("foo").setCron("0/5 * * * * ?");
         assertEquals("Either sync or async task must be set",
                 assertThrows(IllegalStateException.class, () -> job2.schedule()).getMessage());
         job2.setTask(ec -> {
@@ -109,8 +115,9 @@ public class ProgrammaticJobsTest {
     }
 
     @Test
-    public void testAsyncJob() throws InterruptedException {
-        JobDefinition asyncJob = scheduler.newJob("fooAsync")
+    public void testAsyncJob() throws InterruptedException, SchedulerException {
+        String identity = "fooAsync";
+        JobDefinition<?> asyncJob = scheduler.newJob(identity)
                 .setInterval("1s")
                 .setAsyncTask(ec -> {
                     assertTrue(Context.isOnEventLoopThread() && VertxContext.isOnDuplicatedContext());
@@ -125,6 +132,11 @@ public class ProgrammaticJobsTest {
 
         Trigger trigger = asyncJob.schedule();
         assertNotNull(trigger);
+        // JobKey is always built using the identity and "io.quarkus.scheduler.Scheduler" as the group name
+        JobDetail jobDetail = quartzScheduler.getJobDetail(new JobKey(identity, Scheduler.class.getName()));
+        assertNotNull(jobDetail);
+        // We only store metadata for DB store type
+        assertNull(jobDetail.getJobDataMap().get("scheduled_metadata"));
 
         assertTrue(ProgrammaticJobsTest.ASYNC_LATCH.await(5, TimeUnit.SECONDS));
         assertNotNull(scheduler.unscheduleJob("fooAsync"));

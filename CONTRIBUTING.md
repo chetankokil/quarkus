@@ -4,6 +4,8 @@
 We try to make it easy, and all contributions, even the smaller ones, are more than welcome. This includes bug reports,
 fixes, documentation, examples... But first, read this page (including the small print at the end).
 
+<!-- toc -->
+
 - [Legal](#legal)
 - [Reporting an issue](#reporting-an-issue)
 - [Checking an issue is fixed in main](#checking-an-issue-is-fixed-in-main)
@@ -15,45 +17,59 @@ fixes, documentation, examples... But first, read this page (including the small
   * [Coding Guidelines](#coding-guidelines)
   * [Continuous Integration](#continuous-integration)
   * [Tests and documentation are not optional](#tests-and-documentation-are-not-optional)
+  * [Test against Quarkus Superheroes Sample app](#test-against-quarkus-superheroes-sample-app)
 - [Setup](#setup)
   * [IDE Config and Code Style](#ide-config-and-code-style)
     + [Eclipse Setup](#eclipse-setup)
     + [IDEA Setup](#idea-setup)
       - [How to work](#how-to-work)
-      - [`OutOfMemoryError` while importing](#-outofmemoryerror--while-importing)
-      - [`package sun.misc does not exist` while building](#-package-sunmisc-does-not-exist--while-building)
+      - [`OutOfMemoryError` while importing](#outofmemoryerror-while-importing)
+      - [`package sun.misc does not exist` while building](#package-sunmisc-does-not-exist-while-building)
       - [Formatting](#formatting)
   * [Gitpod](#gitpod)
 - [Build](#build)
   * [Workflow tips](#workflow-tips)
+    + [Using mvnd](#using-mvnd)
+    + [Using aliases](#using-aliases)
+      - [Justfile](#justfile)
     + [Building all modules of an extension](#building-all-modules-of-an-extension)
     + [Building a single module of an extension](#building-a-single-module-of-an-extension)
     + [Building with relocations](#building-with-relocations)
     + [Running a single test](#running-a-single-test)
       - [Maven Invoker tests](#maven-invoker-tests)
   * [Build with multiple threads](#build-with-multiple-threads)
-  * [Don't build any test modules](#don-t-build-any-test-modules)
+  * [Don't build any test modules](#dont-build-any-test-modules)
     + [Automatic incremental build](#automatic-incremental-build)
-      - [Special case `bom-descriptor-json`](#special-case--bom-descriptor-json-)
+      - [Special case `bom-descriptor-json`](#special-case-bom-descriptor-json)
       - [Usage by CI](#usage-by-ci)
       - [Develocity build cache](#develocity-build-cache)
+        * [Getting set up](#getting-set-up)
+        * [-Dquickly](#-dquickly)
+        * [Benchmarking the build](#benchmarking-the-build)
 - [Release your own version](#release-your-own-version)
 - [Documentation](#documentation)
   * [Building the documentation](#building-the-documentation)
-  * [Referencing a new guide in the index](#referencing-a-new-guide-in-the-index)
 - [Usage](#usage)
     + [With Maven](#with-maven)
     + [With Gradle](#with-gradle)
-  * [MicroProfile TCK's](#microprofile-tck-s)
+  * [MicroProfile TCK's](#microprofile-tcks)
   * [Test Coverage](#test-coverage)
 - [Extensions](#extensions)
   * [Descriptions](#descriptions)
   * [Update dependencies to extensions](#update-dependencies-to-extensions)
   * [Check security vulnerabilities](#check-security-vulnerabilities)
+  * [External Maven repositories](#external-maven-repositories)
+- [LLM Usage Policy](#llm-usage-policy)
+  * [Acceptable Use of LLMs](#acceptable-use-of-llms)
+  * [Unacceptable Use](#unacceptable-use)
+  * [Consequences](#consequences)
+  * [If in Doubt](#if-in-doubt)
 - [The small print](#the-small-print)
 - [Frequently Asked Questions](#frequently-asked-questions)
 
-<small><i><a href='http://ecotrust-canada.github.io/markdown-toc/'>Table of contents generated with markdown-toc</a></i></small>
+<!-- tocstop -->
+
+<small><i><a href='https://github.com/jonschlinkert/markdown-toc'>Table of contents generated with markdown-toc</a></i></small>
 
 ## Legal
 
@@ -76,7 +92,7 @@ what you would expect to see. Don't forget to indicate your Quarkus, Java, Maven
 Sometimes a bug has been fixed in the `main` branch of Quarkus and you want to confirm it is fixed for your own
 application. There are two simple options for testing the `main` branch:
 
-* either use the snapshots we publish daily on https://s01.oss.sonatype.org/content/repositories/snapshots
+* either use the snapshots we publish daily on <https://central.sonatype.com/repository/maven-snapshots>
 * or build Quarkus locally
 
 The following is a quick summary aimed at allowing you to quickly test `main`. If you are interested in learning more details, refer to
@@ -86,8 +102,8 @@ the [Build section](#build) and the [Usage section](#usage).
 
 Snapshots are published daily with version `999-SNAPSHOT`, so you will have to wait for a snapshot containing the commits you are interested in.
 
-Then just add https://s01.oss.sonatype.org/content/repositories/snapshots as a Maven repository **and** a plugin
-repository in your settings xml:
+Then just add <https://central.sonatype.com/repository/maven-snapshots> as a Maven repository **and** a plugin
+repository in your `settings xml` (which should be placed in the `.m2` directory within your home directory):
 
 ```xml
 
@@ -100,7 +116,7 @@ repository in your settings xml:
             <repositories>
                 <repository>
                     <id>quarkus-snapshots-repository</id>
-                    <url>https://s01.oss.sonatype.org/content/repositories/snapshots/</url>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
                     <releases>
                         <enabled>false</enabled>
                     </releases>
@@ -112,7 +128,7 @@ repository in your settings xml:
             <pluginRepositories>
                 <pluginRepository>
                     <id>quarkus-snapshots-plugin-repository</id>
-                    <url>https://s01.oss.sonatype.org/content/repositories/snapshots/</url>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
                     <releases>
                         <enabled>false</enabled>
                     </releases>
@@ -129,11 +145,18 @@ repository in your settings xml:
 </settings>
 ```
 
-You can check the last publication date here: https://s01.oss.sonatype.org/content/repositories/snapshots/io/quarkus/ .
+You can check the last publication date here: <https://central.sonatype.com/service/rest/repository/browse/maven-snapshots/io/quarkus/quarkus-core/999-SNAPSHOT/>.
 
 ### Building main
 
-Just do the following:
+> [!NOTE]
+> It is recommended to build Quarkus with Java 17 as it is the minimum requirement for Quarkus.
+>
+> You can however build Quarkus with more recent JDKs (such as Java 21) but some Gradle-related modules need to be able to find a Java 17 toolchain so you will need to have Java 17 around.
+>
+> The easiest way to achieve that is to use [SDKMAN!](https://sdkman.io/) to install Java 17 alongside your preferred JDK: it will be automatically detected by Gradle when building the Gradle modules.
+
+You can build Quarkus using the following commands:
 
 ```sh
 git clone git@github.com:quarkusio/quarkus.git
@@ -171,6 +194,15 @@ If you use different computers to contribute, please make sure the name is the s
 
 We use this information to acknowledge your contributions in release announcements.
 
+We also recommend enabling the `pull.rebase` Git option (either globally or specifically for your Quarkus local clone):
+
+```sh
+git config --global pull.rebase true
+```
+
+It will make it easier for you to rebase your pull request against the latest `main` branch using the `git pull upstream main` command.
+Make sure to register the remote `upstream` Quarkus repository beforehand with `git remote add upstream https://github.com/quarkusio/quarkus`.
+
 ### Code reviews
 
 All submissions, including submissions by project members, need to be reviewed by at least one Quarkus committer before
@@ -178,6 +210,12 @@ being merged.
 
 [GitHub Pull Request Review Process](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/about-pull-request-reviews)
 is followed for every pull request.
+
+> [!TIP]
+> We try to review and merge PRs promptly, and we have automation set up to catch stalled PRs.
+> Even so, occasionally things fall through the cracks.
+> In this situation, a good first step is to comment on the PR.
+> If that doesn't work, asking on [the `dev` channel in zulip](https://quarkusio.zulipchat.com/#narrow/channel/187038-dev) is a good next step.
 
 ### Coding Guidelines
 
@@ -189,6 +227,7 @@ is followed for every pull request.
   can be used temporarily during the review process but things should be squashed at the end to have meaningful commits.
   We use merge commits so the GitHub Merge button cannot do that for us. If you don't know how to do that, just ask in
   your pull request, we will be happy to help!
+* Please limit the use of lambdas and streams as much as possible in code that executes at runtime, in order to minimize runtime footprint.
 
 ### Continuous Integration
 
@@ -218,6 +257,23 @@ In the interest of speeding up CI, the native build job `native-tests` have been
 are run in parallel. This means that each new integration test module needs to be configured explicitly
 in [`native-tests.json`](.github/native-tests.json) to have its integration tests run in native mode.
 
+### Test against Quarkus Superheroes Sample app
+
+If your change is non-trivial then you probably want to do a sanity build against the [Quarkus Superheroes Sample app](https://github.com/quarkusio/quarkus-super-heroes). This app
+is the "official" sample application for Quarkus.
+
+The Quarkus Superheroes has a nightly job on https://status.quarkus.io that will build against Quarkus main. This job is used to catch any potential regressions that may
+have slipped past any of the tests. This job will automatically open an issue if the job fails.
+
+Here are the steps to follow to run a build of the Superheroes against your change:
+
+1. [Build](#build) your local branch of the Quarkus codebase containing your change.
+2. Switch to Java 21
+3. `git clone https://github.com/quarkusio/quarkus-super-heroes.git`
+4. `cd quarkus-super-heroes`
+5. `scripts/build-against-quarkus-main.sh`
+6. Wait for build to finish. It should take only a couple of minutes (< 10).
+
 ## Setup
 
 If you have not done so on this machine, you need to:
@@ -227,6 +283,9 @@ If you have not done so on this machine, you need to:
     * macOS: Use the `Disk Utility.app` to check. It also allows you to create a case-sensitive volume to store your code projects. See this [blog entry](https://karnsonline.com/case-sensitive-apfs/) for more.
     * Windows: [Enable case sensitive file names per directory](https://learn.microsoft.com/en-us/windows/wsl/case-sensitivity)
 * Install Git and configure your GitHub access
+  * Windows:
+    * enable longpaths: `git config --global core.longpaths true`
+    * avoid CRLF breaks: `git config --global core.autocrlf false`
 * Install Java SDK 17+ (OpenJDK recommended)
 * Install [GraalVM](https://quarkus.io/guides/building-native-image)
 * Install platform C developer tools:
@@ -390,12 +449,67 @@ Thus, it is recommended to use the following approach:
 Due to Quarkus being a large repository, having to rebuild the entire project every time a change is made isn't very
 productive. The following Maven tips can vastly speed up development when working on a specific extension.
 
+#### Using mvnd
+
+[mvnd](https://github.com/apache/maven-mvnd) is a daemon for Maven providing faster builds.
+It parallelizes your builds by default and makes sure the output is consistent even for a parallelized build.
+
+You can [install mvnd](https://github.com/apache/maven-mvnd?tab=readme-ov-file#how-to-install-mvnd) with SDKMAN!, Homebrew...
+
+mvnd is a good companion for your Quarkus builds.
+
+Make sure you install the latest mvnd 1.0.x which embeds Maven 3.x as Quarkus does not support Maven 4 yet.
+Once it is installed, you can use `mvnd` in your Maven command lines instead of the typical `mvn` or `./mvnw`.
+
+If anything goes wrong, you can stop the daemon and start fresh with `mvnd --stop`.
+
+#### Using aliases
+
+While building with `-Dquickly` or `-DquicklyDocs` is practical when contributing your first patches,
+if you contribute to Quarkus often, it is recommended to have your own aliases - for instance to make sure your build is parallelized.
+
+Here are a couple of useful aliases that are good starting points - and that you will need to adapt to your environment:
+
+- `build-fast`: build the Quarkus artifacts and install them
+- `build-docs`: run from the root of the project, build the documentation
+- `format`: format the source code following our coding conventions
+- `qss`: run the Quarkus CLI from a snapshot (make sure you build the artifacts first)
+
+- If using mvnd
+
+```sh
+alias build-fast="mvnd -e -DskipDocs -DskipTests -DskipITs -Dinvoker.skip -DskipExtensionValidation -Dskip.gradle.tests -Dtruststore.skip clean install"
+alias build-docs="mvnd -e -DskipTests -DskipITs -Dinvoker.skip -DskipExtensionValidation -Dskip.gradle.tests -Dtruststore.skip -Dno-test-modules -Dasciidoctor.fail-if=DEBUG clean install"
+alias format="mvnd process-sources -Denforcer.skip -Dprotoc.skip"
+alias qss="java -jar ${HOME}/git/quarkus/devtools/cli/target/quarkus-cli-999-SNAPSHOT-runner.jar"
+```
+
+- If using plain Maven
+
+```sh
+alias build-fast="mvn -T0.8C -e -DskipDocs -DskipTests -DskipITs -Dinvoker.skip -DskipExtensionValidation -Dskip.gradle.tests -Dtruststore.skip clean install"
+alias build-docs="mvn -T0.8C -e -DskipTests -DskipITs -Dinvoker.skip -DskipExtensionValidation -Dskip.gradle.tests -Dtruststore.skip -Dno-test-modules -Dasciidoctor.fail-if=DEBUG clean install"
+alias format="mvn -T0.8C process-sources -Denforcer.skip -Dprotoc.skip"
+alias qss="java -jar ${HOME}/git/quarkus/devtools/cli/target/quarkus-cli-999-SNAPSHOT-runner.jar"
+```
+
+Using `./mvnw` is often not practical in this case as you might want to call these aliases from a nested directory.
+[gum](https://andresalmiray.com/gum-the-gradle-maven-wrapper/) might be useful in this case.
+
+##### Justfile
+
+As a convenience, we have a [justfile](.justfile)) that provides the suggested set of aliases to use to build Quarkus using [just](https://just.systems/).
+
+Run `just -l` to see the list of aliases.
+
+By default it uses `./mvnw`. If you use `mvnd` you can set the `QMVNCMD` environment variable to `mvnd` to use it instead.
+
 #### Building all modules of an extension
 
 Let's say you want to make changes to the `Jackson` extension. This extension contains the `deployment`, `runtime`
 and `spi` modules which can all be built by executing following command:
 
-```
+```shell
 ./mvnw install -f extensions/jackson/
 ```
 
@@ -407,13 +521,13 @@ all modules in that path recursively.
 Let's say you want to make changes to the `deployment` module of the Jackson extension. There are two ways to accomplish
 this task as shown by the following commands:
 
-```
+```shell
 ./mvnw install -f extensions/jackson/deployment
 ```
 
 or
 
-```
+```shell
 ./mvnw install --projects 'io.quarkus:quarkus-jackson-deployment'
 ```
 
@@ -427,7 +541,7 @@ Quarkus maintains compatibility as much as possible and for most renamed or move
 allowing the build to be redirected to the new artifact.
 However, relocations are not built by default, and to build and install them, you need to enable the `relocations` Maven profile as follows:
 
-```
+```shell
 ./mvnw -Dquickly -Prelocations
 ```
 
@@ -440,7 +554,7 @@ of the `resteasy-jackson` Quarkus integration test (which can be
 found [here](https://github.com/quarkusio/quarkus/blob/main/integration-tests/resteasy-jackson)). One way to accomplish
 this is by executing the following command:
 
-```
+```shell
 ./mvnw test -f integration-tests/resteasy-jackson/ -Dtest=GreetingResourceTest
 ```
 
@@ -452,7 +566,7 @@ directory which houses the test project.
 
 For example, in order to only run the MySQL test project of the container-image tests, the Maven command would be:
 
-```
+```shell
 ./mvnw verify -f integration-tests/container-image/maven-invoker-way -Dinvoker.test=container-build-jib-with-mysql
 ```
 
@@ -465,7 +579,7 @@ specific integration test mentioned above, `-Dstart-containers` and `-Dtest-cont
 The following standard Maven option can be used to build with multiple threads to speed things up (here 0.5 threads per
 CPU core):
 
-```
+```shell
 ./mvnw install -T0.5C
 ```
 
@@ -475,7 +589,7 @@ Please note that running tests in parallel is not supported at the moment!
 
 To omit building currently way over 100 pure test modules, run:
 
-```
+```shell
 ./mvnw install -Dno-test-modules
 ```
 
@@ -491,7 +605,7 @@ Instead of _manually_ specifying the modules to build as in the previous example
 tell [gitflow-incremental-builder (GIB)](https://github.com/gitflow-incremental-builder/gitflow-incremental-builder) to
 only build the modules that have been changed or depend on modules that have been changed (downstream). E.g.:
 
-```
+```shell
 ./mvnw install -Dincremental
 ```
 
@@ -502,7 +616,7 @@ If you just want to build the changes since the last commit on the current branc
 comparison via `-Dgib.disableBranchComparison` (or short: `-Dgib.dbc`).
 
 There are many more configuration options in GIB you can use to customize its
-behaviour: https://github.com/gitflow-incremental-builder/gitflow-incremental-builder#configuration
+behaviour: <https://github.com/gitflow-incremental-builder/gitflow-incremental-builder#configuration>
 
 Parallel builds (`-T...`) should work without problems but parallel test execution is not yet supported (in general, not
 a GIB limitation).
@@ -534,27 +648,27 @@ For more details see the `Get GIB arguments` step in `.github/workflows/ci-actio
 
 ###### Getting set up
 
-Quarkus has a Develocity instance set up at https://ge.quarkus.io that can be used to analyze the build performance of the Quarkus project and also provides build cache services.
+Quarkus has a Develocity instance set up at <https://ge.quarkus.io> that can be used to analyze the build performance of the Quarkus project and also provides build cache services.
 
-If you have an account on https://ge.quarkus.io, this can speed up your local builds significantly.
+If you have an account on <https://ge.quarkus.io>, this can speed up your local builds significantly.
 
 If you have a need or interest to share your build scans and use the build cache, you will need to get an account for the Develocity instance.
 It is only relevant for members of the Quarkus team and you should contact either Guillaume Smet or Max Andersen to set up your account.
 
 When you have the account set up, from the root of your local Quarkus workspace, run:
 
-```
-./mvnw gradle-enterprise:provision-access-key
+```shell
+./mvnw develocity:provision-access-key
 ```
 
 and log in in the browser window it will open (if not already logged in).
-Your access key will be stored in the `~/.m2/.gradle-enterprise/keys.properties` file.
+Your access key will be stored in the `~/.m2/.develocity/keys.properties` file.
 From then your build scans will be sent to the Develocity instance and you will be able to benefit from the build cache.
 
 You can alternatively also generate an API key from the Develocity UI and then use an environment variable like this:
 
-```
-export GRADLE_ENTERPRISE_ACCESS_KEY=ge.quarkus.io=a_secret_key
+```shell
+export DEVELOCITY_ACCESS_KEY=ge.quarkus.io=a_secret_key
 ```
 
 When debugging a test (and especially flaky tests), you might want to temporarily disable the build cache.
@@ -564,7 +678,7 @@ The remote cache is stored on the Develocity server and is populated by CI.
 To be able to benefit from the remote cache, you need to use a Java version tested on CI (at the moment, either 17 or 21) and the same Maven version (thus why it is recommended to use the Maven wrapper aka `./mvnw`).
 Note that the local cache alone should bring you a significant speedup.
 
-The local cache is stored in the `~/.m2/.gradle-enterprise/build-cache/` directory.
+The local cache is stored in the `~/.m2/.develocity/build-cache/` directory.
 If you have problems with your local cache, you can delete this directory.
 
 ###### -Dquickly
@@ -640,7 +754,7 @@ When contributing a significant documentation change, it is highly recommended t
 
 First build the whole Quarkus repository with the documentation build enabled:
 
-```
+```shell
 ./mvnw -DquicklyDocs
 ```
 
@@ -649,7 +763,7 @@ directory and will avoid a lot of warnings when building the documentation modul
 
 Then you can build the `docs` module specifically:
 
-```
+```shell
 ./mvnw -f docs clean install
 ```
 
@@ -657,20 +771,6 @@ You can check the output of the build in the `docs/target/generated-docs/` direc
 
 You can build the documentation this way as many times as needed, just avoid doing a `./mvnw clean` at the root level
 because you would lose the configuration properties documentation includes.
-
-### Referencing a new guide in the index
-
-The [Guides index page](https://quarkus.io/guides/) visible on the website is generated from a YAML file
-named `guides-latest.yaml` present in
-the [Quarkus.io website repository](https://github.com/quarkusio/quarkusio.github.io/blob/develop/_data/guides-latest.yaml)
-. This particular file is for the latest stable version.
-
-When adding a new guide to the `main` version of Quarkus, you need to reference the guide in
-the [`main` guides index YAML file](https://github.com/quarkusio/quarkusio.github.io/blob/develop/_data/guides-main.yaml)
-.
-
-This file will later be copied to become the new `guides-latest.yaml` file when the next major or minor version is
-released.
 
 ## Usage
 
@@ -682,7 +782,7 @@ To include them into your project a few things have to be changed.
 
 *pom.xml*
 
-```
+```xml
 <properties>
     <quarkus-plugin.version>999-SNAPSHOT</quarkus-plugin.version>
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -698,7 +798,7 @@ To include them into your project a few things have to be changed.
 
 *gradle.properties*
 
-```
+```ini
 quarkusPlatformArtifactId=quarkus-bom
 quarkusPluginVersion=999-SNAPSHOT
 quarkusPlatformVersion=999-SNAPSHOT
@@ -707,7 +807,7 @@ quarkusPlatformGroupId=io.quarkus
 
 *settings.gradle*
 
-```
+```gradle
 pluginManagement {
     repositories {
         mavenLocal() // add mavenLocal() to first position
@@ -722,7 +822,7 @@ pluginManagement {
 
 *build.gradle*
 
-```
+```gradle
 repositories {
     mavenLocal() // add mavenLocal() to first position
     mavenCentral()
@@ -732,7 +832,7 @@ repositories {
 ### MicroProfile TCK's
 
 Quarkus has a TCK module in `tcks` where all the MicroProfile TCK's are set up for you to run if you wish. These include
-tests to areas like Config, JWT Authentication, Fault Tolerance, Health Checks, Metrics, OpenAPI, OpenTracing, REST
+tests to areas like Config, JWT Authentication, Fault Tolerance, Health Checks, Metrics, OpenAPI, Telemetry, REST
 Client, Reactive Messaging and Context Propagation.
 
 The TCK module is not part of the main Maven reactor build, but you can enable it and run the TCK tests by activating
@@ -762,7 +862,7 @@ with `-f ...`).
 ### Descriptions
 
 Extensions descriptions (in the `runtime/pom.xml` description or in the YAML `quarkus-extension.yaml`)
-are used to describe the extension and are visible in https://code.quarkus.io and https://extensions.quarkus.io. Try and pay attention to it. Here are a
+are used to describe the extension and are visible in <https://code.quarkus.io> and <https://extensions.quarkus.io>. Try and pay attention to it. Here are a
 few recommendation guidelines:
 
 - keep it relatively short so that no hover is required to read it
@@ -798,6 +898,54 @@ When adding a new extension or updating the dependencies of an existing one,
 it is recommended to run in the extension directory the [OWASP Dependency Check](https://jeremylong.github.io/DependencyCheck) with `mvn -Dowasp-check`
 so that known security vulnerabilities in the extension dependencies can be detected early.
 
+### External Maven repositories
+
+The Quarkus Platform build is using the `--ignore-transitive-repositories` option from Maven.
+It ignores remote repositories introduced by transitive dependencies.
+
+This option is used to make sure we know when one of our dependencies relies on a repository that is not Maven Central.
+
+When a dependency relies on an external repository that is not Maven Central, we have to be extra careful:
+
+- First discuss it with the Quarkus Core team as it is something we want to avoid
+- If everyone agrees it is something we should allow in this specific case:
+  - Add the repository to the Quarkus module requiring the external repository (for instance, a specific extension runtime module) - don't add it to the root `pom.xml`
+  - Make sure you declare Maven Central first in the added `<repositories>` element so that we only download dependencies that are not in Maven Central from the external repository - see existing examples in the code base
+  - Add a `.mvn/rrf/groupId-<REPOSITORY-ID>.txt` file containing the list of authorized ``groupIds`` for this repository (one per line) - see existing examples in the code base
+  - Make sure you can fully run the build with an empty Maven local repository using `./mvnw -Dquickly -Dmaven.repo.local=/tmp/my-temp-local-repository`
+
+## LLM Usage Policy
+
+At Quarkus, we welcome tools that help developers become more productive — including Large Language Models (LLMs) and Agents like ChatGPT, GitHub Copilot, and others.
+
+However, recent patterns of use have led to increased moderation burden, low-value contributions, and reduced community signal. To ensure a healthy and productive community, the following expectations apply:
+
+### Acceptable Use of LLMs
+
+- LLMs may be used to **assist your development** — e.g. drafting code, writing documentation, proposing fixes — as long as **you understand, validate**, and **take responsibility for the results.**
+- You should only submit contributions (PRs, comments, discussions, issues) that reflect your **own understanding** and **intent**, not what an Agent/LLM "spit out."
+- You may use Agents/LLMs to help you **write better**, but not to **post more**.
+
+### Unacceptable Use
+
+- Submitting code, tests, comments, or issues that appear to be **copied directly from an LLM with little or no human oversight** is **not acceptable**.
+- Posting **large volumes of low-effort suggestions, vague issues, or links with no context** — even if technically accurate — is considered spam.
+- Submitting **AI-generated tests that do not validate actual behavior** or meaningfully cover functionality is not helpful and will be rejected.
+- Using bots, agents, or automated tools to open PRs, file issues, or post content **without human authorship and responsibility** is not allowed.
+
+### Consequences
+
+- We may close issues, PRs, or discussions that violate this policy without detailed explanation.
+- Repeated violations may result in temporary or permanent restrictions from participating in the project.
+
+### If in Doubt
+
+If you're unsure whether your use of Agent/LLMs is acceptable — ask! We're happy to help contributors learn how to use AI tools effectively **without creating noise**.
+
+> This isn’t about banning AI — it’s about keeping Quarkus collaborative, human-driven, and focused on quality.
+
+
+
 ## The small print
 
 This project is an open source project, please act responsibly, be nice, polite and enjoy!
@@ -815,17 +963,15 @@ This project is an open source project, please act responsibly, be nice, polite 
 
   See section `IDEA Setup` as there are different possible solutions described.
 
-* IntelliJ does not recognize the project as a Java 17 project
-
-  In the Maven pane, uncheck the `include-jdk-misc` and `compile-java8-release-flag` profiles
-
 * Build hangs with DevMojoIT running infinitely
-  ```
+
+  ```shell
   ./mvnw clean install
   # Wait...
   [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.192 s - in io.quarkus.maven.it.GenerateConfigIT
   [INFO] Running io.quarkus.maven.it.DevMojoIT
   ```
+
   DevMojoIT require a few minutes to run but anything more than that is not expected. Make sure that nothing is running
   on 8080.
 
@@ -849,10 +995,12 @@ This project is an open source project, please act responsibly, be nice, polite 
 
   Just scroll up, there should be an error or warning somewhere. Failing enforcer rules are known to cause such effects
   and in this case there'll be something like:
+
   ```
   [WARNING] Rule 0: ... failed with message:
   ...
   ```
+
 * Tests fail with `Caused by: io.quarkus.runtime.QuarkusBindException: Port(s) already bound: 8080: Address already in use`
 
     Check that you do not have other Quarkus dev environments, apps or other web servers running on this default 8080 port.

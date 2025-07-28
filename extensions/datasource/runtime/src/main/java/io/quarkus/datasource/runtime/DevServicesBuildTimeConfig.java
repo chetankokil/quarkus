@@ -1,10 +1,14 @@
 package io.quarkus.datasource.runtime;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
+import io.quarkus.runtime.configuration.TrimmedStringConverter;
+import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 
 @ConfigGroup
@@ -25,11 +29,12 @@ public interface DevServicesBuildTimeConfig {
      * <p>
      * This has no effect if the provider is not a container-based database, such as H2 or Derby.
      */
-    Optional<String> imageName();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> imageName();
 
     /**
      * Environment variables that are passed to the container.
      */
+    @ConfigDocMapKey("environment-variable-name")
     Map<String, String> containerEnv();
 
     /**
@@ -38,11 +43,13 @@ public interface DevServicesBuildTimeConfig {
      * Properties defined here are database-specific
      * and are interpreted specifically in each database dev service implementation.
      */
+    @ConfigDocMapKey("property-key")
     Map<String, String> containerProperties();
 
     /**
      * Generic properties that are added to the database connection URL.
      */
+    @ConfigDocMapKey("property-key")
     Map<String, String> properties();
 
     /**
@@ -57,12 +64,12 @@ public interface DevServicesBuildTimeConfig {
      * <p>
      * This has no effect if the provider is not a container-based database, such as H2 or Derby.
      */
-    Optional<String> command();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> command();
 
     /**
      * The database name to use if this Dev Service supports overriding it.
      */
-    Optional<String> dbName();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> dbName();
 
     /**
      * The username to use if this Dev Service supports overriding it.
@@ -75,11 +82,19 @@ public interface DevServicesBuildTimeConfig {
     Optional<String> password();
 
     /**
-     * The path to a SQL script to be loaded from the classpath and applied to the Dev Service database.
+     * The paths to SQL scripts to be loaded from the classpath and applied to the Dev Service database.
      * <p>
      * This has no effect if the provider is not a container-based database, such as H2 or Derby.
      */
-    Optional<String> initScriptPath();
+    Optional<List<@WithConverter(TrimmedStringConverter.class) String>> initScriptPath();
+
+    /**
+     * The paths to SQL scripts to be loaded from the classpath and applied to the Dev Service database using the SYS privileged
+     * user.
+     * Not all databases provide a privileged user. In these cases, the property is ignored.
+     * This has no effect if the provider is not a container-based database, such as H2 or Derby.
+     */
+    Optional<List<@WithConverter(TrimmedStringConverter.class) String>> initPrivilegedScriptPath();
 
     /**
      * The volumes to be mapped to the container.
@@ -93,6 +108,7 @@ public interface DevServicesBuildTimeConfig {
      * <p>
      * This has no effect if the provider is not a container-based database, such as H2 or Derby.
      */
+    @ConfigDocMapKey("host-path")
     Map<String, String> volumes();
 
     /**
@@ -119,5 +135,13 @@ public interface DevServicesBuildTimeConfig {
      */
     @WithDefault("true")
     boolean reuse();
+
+    /**
+     * Whether the logs should be consumed by the JBoss logger.
+     * <p>
+     * This has no effect if the provider is not a container-based database, such as H2 or Derby.
+     */
+    @WithDefault("false")
+    boolean showLogs();
 
 }

@@ -13,6 +13,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import io.quarkus.qute.trace.ResolveEvent;
+
 public final class Results {
 
     public static final CompletedStage<Object> FALSE = CompletedStage.of(false);
@@ -43,17 +45,22 @@ public final class Results {
         return CompletedStage.of(NotFound.EMPTY);
     }
 
-    static CompletionStage<ResultNode> process(List<CompletionStage<ResultNode>> results) {
-        // Collect async results first
+    static CompletionStage<ResultNode> resolveAndProcess(List<TemplateNode> nodes, ResolutionContext context,
+            EngineImpl engine) {
+        int nodesCount = nodes.size();
+        if (nodesCount == 1) {
+            // Single node in the block
+            return resolveWith(nodes.get(0), context, engine);
+        }
         @SuppressWarnings("unchecked")
-        Supplier<ResultNode>[] allResults = new Supplier[results.size()];
+        Supplier<ResultNode>[] allResults = new Supplier[nodesCount];
         List<CompletableFuture<ResultNode>> asyncResults = null;
         int idx = 0;
-        for (CompletionStage<ResultNode> result : results) {
+        for (TemplateNode templateNode : nodes) {
+            final CompletionStage<ResultNode> result = resolveWith(templateNode, context, engine);
             if (result instanceof CompletedStage) {
-                allResults[idx++] = (CompletedStage<ResultNode>) result;
                 // No async computation needed
-                continue;
+                allResults[idx++] = (CompletedStage<ResultNode>) result;
             } else {
                 CompletableFuture<ResultNode> fu = result.toCompletableFuture();
                 if (asyncResults == null) {
@@ -63,6 +70,11 @@ public final class Results {
                 allResults[idx++] = Futures.toSupplier(fu);
             }
         }
+        return toCompletionStage(allResults, asyncResults);
+    }
+
+    private static CompletionStage<ResultNode> toCompletionStage(Supplier<ResultNode>[] allResults,
+            List<CompletableFuture<ResultNode>> asyncResults) {
         if (asyncResults == null) {
             // No async results present
             return CompletedStage.of(new MultiResultNode(allResults));
@@ -84,6 +96,70 @@ public final class Results {
             });
             return ret;
         }
+    }
+
+    /**
+     * This method is trying to speed-up the resolve method which could become a virtual dispatch, harming
+     * the performance of trivial implementations like TextNode::resolve, which is as simple as a field access.
+     */
+    private static CompletionStage<ResultNode> resolveWith(TemplateNode templateNode, ResolutionContext context,
+            EngineImpl engine) {
+        TraceManagerImpl traceManager = engine.traceManager;
+        if (traceManager == null) {
+            return doResolveWith(templateNode, context);
+        }
+
+        // Notify trace listeners before resolving the template node.
+        final ResolveEvent event = new ResolveEvent(templateNode, context, engine);
+        traceManager.fireBeforeResolveEvent(event);
+
+        return doResolveWith(templateNode, context).whenComplete((result, error) -> {
+            // Notify trace listeners after resolving the template node.
+            event.resolve(result, error);
+            traceManager.fireAfterResolveEvent(event);
+        });
+    }
+
+    /**
+     * This method is trying to speed-up the resolve method which could become a virtual dispatch, harming
+     * the performance of trivial implementations like TextNode::resolve, which is as simple as a field access.
+     */
+    private static CompletionStage<ResultNode> doResolveWith(TemplateNode templateNode, ResolutionContext context) {
+        if (templateNode instanceof TextNode textNode) {
+            return textNode.resolve(context);
+        }
+        if (templateNode instanceof ExpressionNode expressionNode) {
+            return expressionNode.resolve(context);
+        }
+        if (templateNode instanceof SectionNode sectionNode) {
+            return sectionNode.resolve(context);
+        }
+        if (templateNode instanceof ParameterDeclarationNode paramNode) {
+            return paramNode.resolve(context);
+        }
+        return templateNode.resolve(context);
+    }
+
+    static CompletionStage<ResultNode> process(List<CompletionStage<ResultNode>> results) {
+        // Collect async results first
+        @SuppressWarnings("unchecked")
+        Supplier<ResultNode>[] allResults = new Supplier[results.size()];
+        List<CompletableFuture<ResultNode>> asyncResults = null;
+        int idx = 0;
+        for (CompletionStage<ResultNode> result : results) {
+            if (result instanceof CompletedStage) {
+                // No async computation needed
+                allResults[idx++] = (CompletedStage<ResultNode>) result;
+            } else {
+                CompletableFuture<ResultNode> fu = result.toCompletableFuture();
+                if (asyncResults == null) {
+                    asyncResults = new ArrayList<>();
+                }
+                asyncResults.add(fu);
+                allResults[idx++] = Futures.toSupplier(fu);
+            }
+        }
+        return toCompletionStage(allResults, asyncResults);
     }
 
     /**

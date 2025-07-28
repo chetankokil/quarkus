@@ -10,13 +10,14 @@
    </parent>
 
    <modelVersion>4.0.0</modelVersion>
-   <artifactId>quarkus-smallrye-reactive-messaging-parent</artifactId>
-   <name>Quarkus - SmallRye Reactive Messaging</name>
+   <artifactId>quarkus-messaging-parent</artifactId>
+   <name>Quarkus - Messaging</name>
    <packaging>pom</packaging>
 
    <modules>
       <module>deployment</module>
       <module>kotlin</module>
       <module>runtime</module>
+      <module>runtime-dev</module>
    </modules>
 </project>

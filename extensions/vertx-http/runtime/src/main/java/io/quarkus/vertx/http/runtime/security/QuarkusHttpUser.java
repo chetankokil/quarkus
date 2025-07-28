@@ -49,6 +49,7 @@ public class QuarkusHttpUser implements User {
     }
 
     @Override
+    @Deprecated
     public User isAuthorized(String authority, Handler<AsyncResult<Boolean>> resultHandler) {
         resultHandler.handle(Future.succeededFuture(securityIdentity.hasRole(authority)));
         return this;
@@ -134,5 +135,17 @@ public class QuarkusHttpUser implements User {
                     .authenticate(setRoutingContextAttribute(new AnonymousAuthenticationRequest(), routingContext));
         }
         return Uni.createFrom().nullItem();
+    }
+
+    static Uni<SecurityIdentity> setIdentity(Uni<SecurityIdentity> identityUni, RoutingContext routingContext) {
+        routingContext.setUser(null);
+        routingContext.put(QuarkusHttpUser.DEFERRED_IDENTITY_KEY, identityUni);
+        return identityUni;
+    }
+
+    public static SecurityIdentity setIdentity(SecurityIdentity identity, RoutingContext routingContext) {
+        routingContext.setUser(new QuarkusHttpUser(identity));
+        routingContext.put(QuarkusHttpUser.DEFERRED_IDENTITY_KEY, Uni.createFrom().item(identity));
+        return identity;
     }
 }

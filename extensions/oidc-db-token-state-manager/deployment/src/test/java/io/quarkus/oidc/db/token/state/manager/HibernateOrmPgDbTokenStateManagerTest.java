@@ -10,14 +10,13 @@ import java.time.Duration;
 import java.util.List;
 
 import org.awaitility.Awaitility;
+import org.htmlunit.WebClient;
+import org.htmlunit.WebRequest;
+import org.htmlunit.WebResponse;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPage;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-
-import com.gargoylesoftware.htmlunit.WebClient;
-import com.gargoylesoftware.htmlunit.WebRequest;
-import com.gargoylesoftware.htmlunit.WebResponse;
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
 
 import io.quarkus.builder.Version;
 import io.quarkus.maven.dependency.Dependency;
@@ -51,7 +50,7 @@ public class HibernateOrmPgDbTokenStateManagerTest extends AbstractDbTokenStateM
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
 
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals(200, page.getWebResponse().getStatusCode());
 
             WebResponse webResponse = webClient.loadWebResponse(

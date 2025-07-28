@@ -1,6 +1,9 @@
 package io.quarkus.hibernate.orm.deployment;
 
 import static io.quarkus.hibernate.orm.deployment.ClassNames.GENERATORS;
+import static io.quarkus.hibernate.orm.deployment.ClassNames.OPTIMIZERS;
+
+import java.util.stream.Stream;
 
 import org.jboss.jandex.DotName;
 
@@ -21,10 +24,15 @@ public class GraalVMFeatures {
         return new NativeImageFeatureBuildItem("org.hibernate.graalvm.internal.GraalVMStaticFeature");
     }
 
-    // Workaround for https://hibernate.atlassian.net/browse/HHH-16439
+    // TODO try to limit registration to those that are actually needed, based on configuration + mapping.
+    //   https://github.com/quarkusio/quarkus/pull/32433#issuecomment-1497615958
+    //   See also io.quarkus.hibernate.orm.deployment.JpaJandexScavenger.enlistClassReferences for
+    //   the beginning of a solution (which only handles custom types, not references by name such as 'sequence').
     @BuildStep
-    ReflectiveClassBuildItem registerGeneratorClassesForReflections() {
-        return ReflectiveClassBuildItem.builder(GENERATORS.stream().map(DotName::toString).toArray(String[]::new))
+    ReflectiveClassBuildItem registerGeneratorAndOptimizerClassesForReflections() {
+        return ReflectiveClassBuildItem
+                .builder(Stream.concat(GENERATORS.stream(), OPTIMIZERS.stream()).map(DotName::toString).toArray(String[]::new))
+                .reason(ClassNames.GRAAL_VM_FEATURES.toString())
                 .build();
     }
 
@@ -33,7 +41,17 @@ public class GraalVMFeatures {
     @BuildStep
     ReflectiveClassBuildItem registerJdbcArrayTypesForReflection() {
         return ReflectiveClassBuildItem
-                .builder(HibernateOrmTypes.JDBC_JAVA_TYPES.stream().map(d -> d.toString() + "[]").toArray(String[]::new))
+                .builder(ClassNames.JDBC_JAVA_TYPES.stream().map(d -> d.toString() + "[]").toArray(String[]::new))
+                .reason(ClassNames.GRAAL_VM_FEATURES.toString())
+                .build();
+    }
+
+    // Workaround for https://hibernate.atlassian.net/browse/HHH-18975
+    @BuildStep
+    ReflectiveClassBuildItem registerNamingStrategiesForReflections() {
+        return ReflectiveClassBuildItem
+                .builder(ClassNames.NAMING_STRATEGIES.stream().map(DotName::toString).toArray(String[]::new))
+                .reason(ClassNames.GRAAL_VM_FEATURES.toString())
                 .build();
     }
 

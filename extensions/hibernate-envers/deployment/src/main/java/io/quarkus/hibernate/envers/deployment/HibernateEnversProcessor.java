@@ -1,5 +1,6 @@
 package io.quarkus.hibernate.envers.deployment;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -28,24 +29,32 @@ public final class HibernateEnversProcessor {
     List<AdditionalJpaModelBuildItem> addJpaModelClasses() {
         return Arrays.asList(
                 new AdditionalJpaModelBuildItem("org.hibernate.envers.DefaultRevisionEntity"),
-                new AdditionalJpaModelBuildItem("org.hibernate.envers.DefaultTrackingModifiedEntitiesRevisionEntity"));
+                new AdditionalJpaModelBuildItem("org.hibernate.envers.DefaultTrackingModifiedEntitiesRevisionEntity"),
+                new AdditionalJpaModelBuildItem("org.hibernate.envers.RevisionMapping"),
+                new AdditionalJpaModelBuildItem("org.hibernate.envers.TrackingModifiedEntitiesRevisionMapping"));
     }
 
     @BuildStep
     public void registerEnversReflections(BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
             HibernateEnversBuildTimeConfig buildTimeConfig) {
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder("org.hibernate.envers.DefaultRevisionEntity").methods()
-                .build());
-        reflectiveClass
-                .produce(ReflectiveClassBuildItem.builder("org.hibernate.envers.DefaultTrackingModifiedEntitiesRevisionEntity")
-                        .methods().build());
+        // This is necessary because these classes are added to the model conditionally at static init,
+        // so they don't get processed by HibernateOrmProcessor and in particular don't get reflection enabled.
+        reflectiveClass.produce(ReflectiveClassBuildItem.builder(
+                "org.hibernate.envers.DefaultRevisionEntity",
+                "org.hibernate.envers.DefaultTrackingModifiedEntitiesRevisionEntity",
+                "org.hibernate.envers.RevisionMapping",
+                "org.hibernate.envers.TrackingModifiedEntitiesRevisionMapping")
+                .reason(getClass().getName())
+                .methods().build());
 
+        List<String> classes = new ArrayList<>(buildTimeConfig.persistenceUnits().size() * 2);
         for (HibernateEnversBuildTimeConfigPersistenceUnit pu : buildTimeConfig.persistenceUnits().values()) {
-            pu.revisionListener().ifPresent(
-                    s -> reflectiveClass.produce(ReflectiveClassBuildItem.builder(s).methods().fields().build()));
-            pu.auditStrategy().ifPresent(
-                    s -> reflectiveClass.produce(ReflectiveClassBuildItem.builder(s).methods().fields().build()));
+            pu.revisionListener().ifPresent(classes::add);
+            pu.auditStrategy().ifPresent(classes::add);
         }
+        reflectiveClass.produce(ReflectiveClassBuildItem.builder(classes.toArray(new String[0]))
+                .reason("Configured Envers listeners and audit strategies")
+                .methods().fields().build());
     }
 
     @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)

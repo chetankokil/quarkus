@@ -2,6 +2,7 @@ package io.quarkus.qute;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -9,9 +10,12 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
+import io.quarkus.qute.EngineBuilder.EngineListener;
 import io.quarkus.qute.TemplateInstance.Initializer;
 import io.quarkus.qute.TemplateLocator.TemplateLocation;
 import io.quarkus.qute.TemplateNode.Origin;
@@ -114,6 +118,77 @@ public class EngineTest {
         assertFalse(engine2.getEvaluator().strictRendering());
         assertTrue(engine2.useAsyncTimeout());
         assertEquals(engine1.getSectionHelperFactories().size(), engine2.getSectionHelperFactories().size());
+    }
+
+    @Test
+    public void testInvalidTemplateIdentifier() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Engine.builder().build().putTemplate("foo o", null));
+        assertEquals("Invalid identifier found: [foo o]", e.getMessage());
+    }
+
+    private interface MyResolver extends ValueResolver, EngineListener {
+    }
+
+    private interface MyNamespaceResolver extends NamespaceResolver, EngineListener {
+    }
+
+    @Test
+    public void testListeners() {
+        AtomicReference<Engine> listenerEngine = new AtomicReference<>();
+        Engine engine = Engine.builder()
+                .timeout(2000)
+                .addEngineListener(new EngineListener() {
+
+                    @Override
+                    public void engineBuilt(Engine engine) {
+                        listenerEngine.set(engine);
+                    }
+
+                })
+                .addValueResolver(new ReflectionValueResolver())
+                .addValueResolver(new MyResolver() {
+
+                    volatile Engine engine;
+
+                    @Override
+                    public CompletionStage<Object> resolve(EvalContext context) {
+                        if (context.getName().equals("engine")) {
+                            return CompletedStage.of(engine);
+                        }
+                        return Results.notFound();
+                    }
+
+                    @Override
+                    public void engineBuilt(Engine engine) {
+                        this.engine = engine;
+                    }
+                })
+                .addNamespaceResolver(new MyNamespaceResolver() {
+
+                    volatile Engine engine;
+
+                    @Override
+                    public CompletionStage<Object> resolve(EvalContext context) {
+                        if (context.getName().equals("engine")) {
+                            return CompletedStage.of(engine);
+                        }
+                        return Results.notFound();
+                    }
+
+                    @Override
+                    public void engineBuilt(Engine engine) {
+                        this.engine = engine;
+                    }
+
+                    @Override
+                    public String getNamespace() {
+                        return "foo";
+                    }
+                })
+                .build();
+        assertEquals(engine, listenerEngine.get());
+        assertEquals("2000::2000", engine.parse("{engine.timeout}::{foo:engine.timeout}").render());
     }
 
 }

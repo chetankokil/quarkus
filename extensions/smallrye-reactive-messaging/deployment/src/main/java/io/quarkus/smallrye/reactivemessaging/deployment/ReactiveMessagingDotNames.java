@@ -10,7 +10,10 @@ import org.eclipse.microprofile.reactive.messaging.spi.IncomingConnectorFactory;
 import org.eclipse.microprofile.reactive.messaging.spi.OutgoingConnectorFactory;
 import org.jboss.jandex.DotName;
 
+import io.smallrye.common.annotation.NonBlocking;
 import io.smallrye.common.annotation.RunOnVirtualThread;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.MessageConverter;
 import io.smallrye.reactive.messaging.MutinyEmitter;
 import io.smallrye.reactive.messaging.annotations.Blocking;
@@ -29,6 +32,7 @@ import io.smallrye.reactive.messaging.connector.OutboundConnector;
 import io.smallrye.reactive.messaging.keyed.KeyValueExtractor;
 import io.smallrye.reactive.messaging.keyed.Keyed;
 import io.smallrye.reactive.messaging.keyed.KeyedMulti;
+import io.smallrye.reactive.messaging.providers.extension.HealthCenter;
 
 public final class ReactiveMessagingDotNames {
 
@@ -46,6 +50,7 @@ public final class ReactiveMessagingDotNames {
     static final DotName CONNECTOR_ATTRIBUTE = DotName.createSimple(ConnectorAttribute.class.getName());
 
     static final DotName BLOCKING = DotName.createSimple(Blocking.class.getName());
+    static final DotName NON_BLOCKING = DotName.createSimple(NonBlocking.class.getName());
     public static final DotName CHANNEL = DotName
             .createSimple(org.eclipse.microprofile.reactive.messaging.Channel.class.getName());
     public static final DotName LEGACY_CHANNEL = DotName.createSimple(Channel.class.getName());
@@ -93,6 +98,11 @@ public final class ReactiveMessagingDotNames {
 
     static final DotName TRANSACTIONAL = DotName.createSimple("jakarta.transaction.Transactional");
     static final DotName RUN_ON_VIRTUAL_THREAD = DotName.createSimple(RunOnVirtualThread.class.getName());
+
+    static final DotName UNI = DotName.createSimple(Uni.class.getName());
+    static final DotName MULTI = DotName.createSimple(Multi.class.getName());
+
+    static final DotName HEALTH_CENTER = DotName.createSimple(HealthCenter.class.getName());
 
     private ReactiveMessagingDotNames() {
     }

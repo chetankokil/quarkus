@@ -19,7 +19,11 @@ public final class JavaVersion {
     }
 
     public JavaVersion(String version) {
-        this.version = version;
+        if (version != null && version.startsWith("1.")) {
+            this.version = version.substring(2);
+        } else {
+            this.version = version;
+        }
     }
 
     public boolean isEmpty() {
@@ -62,7 +66,7 @@ public final class JavaVersion {
     }
 
     // ordering is important here, so let's keep them ordered
-    public static final SortedSet<Integer> JAVA_VERSIONS_LTS = new TreeSet<>(List.of(11, 17, 21));
+    public static final SortedSet<Integer> JAVA_VERSIONS_LTS = new TreeSet<>(List.of(17, 21));
     public static final int DEFAULT_JAVA_VERSION = 17;
     // we want to maximize the compatibility of extensions with the Quarkus ecosystem so let's stick to 17 by default
     public static final String DEFAULT_JAVA_VERSION_FOR_EXTENSION = "17";

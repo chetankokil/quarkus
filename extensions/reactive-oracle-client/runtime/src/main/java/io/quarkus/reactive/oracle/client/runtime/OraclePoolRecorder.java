@@ -2,10 +2,13 @@ package io.quarkus.reactive.oracle.client.runtime;
 
 import static io.quarkus.credentials.CredentialsProvider.PASSWORD_PROPERTY_NAME;
 import static io.quarkus.credentials.CredentialsProvider.USER_PROPERTY_NAME;
+import static io.quarkus.reactive.datasource.runtime.ReactiveDataSourceUtil.qualifier;
 import static io.quarkus.reactive.datasource.runtime.UnitisedTime.unitised;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -14,14 +17,13 @@ import jakarta.enterprise.util.TypeLiteral;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.arc.ActiveResult;
 import io.quarkus.arc.SyntheticCreationalContext;
 import io.quarkus.credentials.CredentialsProvider;
 import io.quarkus.credentials.runtime.CredentialsProviderFinder;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
 import io.quarkus.datasource.runtime.DataSourceRuntimeConfig;
-import io.quarkus.datasource.runtime.DataSourceSupport;
 import io.quarkus.datasource.runtime.DataSourcesRuntimeConfig;
-import io.quarkus.reactive.datasource.ReactiveDataSource;
 import io.quarkus.reactive.datasource.runtime.ConnectOptionsSupplier;
 import io.quarkus.reactive.datasource.runtime.DataSourceReactiveRuntimeConfig;
 import io.quarkus.reactive.datasource.runtime.DataSourcesReactiveRuntimeConfig;
@@ -34,6 +36,7 @@ import io.vertx.core.Vertx;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.oracleclient.OracleConnectOptions;
 import io.vertx.oracleclient.OraclePool;
+import io.vertx.oracleclient.spi.OracleDriver;
 import io.vertx.sqlclient.PoolOptions;
 import io.vertx.sqlclient.impl.Utils;
 
@@ -41,27 +44,51 @@ import io.vertx.sqlclient.impl.Utils;
 @Recorder
 public class OraclePoolRecorder {
 
-    private static final TypeLiteral<Instance<OraclePoolCreator>> TYPE_LITERAL = new TypeLiteral<>() {
+    private static final Logger log = Logger.getLogger(OraclePoolRecorder.class);
+    private static final TypeLiteral<Instance<OraclePoolCreator>> POOL_CREATOR_TYPE_LITERAL = new TypeLiteral<>() {
     };
 
-    private static final Logger log = Logger.getLogger(OraclePoolRecorder.class);
+    private final RuntimeValue<DataSourcesRuntimeConfig> runtimeConfig;
+    private final RuntimeValue<DataSourcesReactiveRuntimeConfig> reactiveRuntimeConfig;
+    private final RuntimeValue<DataSourcesReactiveOracleConfig> reactiveOracleRuntimeConfig;
+
+    public OraclePoolRecorder(
+            final RuntimeValue<DataSourcesRuntimeConfig> runtimeConfig,
+            final RuntimeValue<DataSourcesReactiveRuntimeConfig> reactiveRuntimeConfig,
+            final RuntimeValue<DataSourcesReactiveOracleConfig> reactiveOracleRuntimeConfig) {
+        this.runtimeConfig = runtimeConfig;
+        this.reactiveRuntimeConfig = reactiveRuntimeConfig;
+        this.reactiveOracleRuntimeConfig = reactiveOracleRuntimeConfig;
+    }
+
+    public Supplier<ActiveResult> poolCheckActiveSupplier(String dataSourceName) {
+        return new Supplier<>() {
+            @Override
+            public ActiveResult get() {
+                Optional<Boolean> active = runtimeConfig.getValue().dataSources().get(dataSourceName).active();
+                if (active.isPresent() && !active.get()) {
+                    return ActiveResult.inactive(DataSourceUtil.dataSourceInactiveReasonDeactivated(dataSourceName));
+                }
+                if (reactiveRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive().url().isEmpty()) {
+                    return ActiveResult.inactive(DataSourceUtil.dataSourceInactiveReasonUrlMissing(dataSourceName,
+                            "reactive.url"));
+                }
+                return ActiveResult.active();
+            }
+        };
+    }
 
     public Function<SyntheticCreationalContext<OraclePool>, OraclePool> configureOraclePool(RuntimeValue<Vertx> vertx,
-            Supplier<Integer> eventLoopCount,
-            String dataSourceName,
-            DataSourcesRuntimeConfig dataSourcesRuntimeConfig,
-            DataSourcesReactiveRuntimeConfig dataSourcesReactiveRuntimeConfig,
-            DataSourcesReactiveOracleConfig dataSourcesReactiveOracleConfig,
-            ShutdownContext shutdown) {
-        return new Function<SyntheticCreationalContext<OraclePool>, OraclePool>() {
+            Supplier<Integer> eventLoopCount, String dataSourceName, ShutdownContext shutdown) {
+        return new Function<>() {
             @Override
             public OraclePool apply(SyntheticCreationalContext<OraclePool> context) {
                 OraclePool pool = initialize((VertxInternal) vertx.getValue(),
                         eventLoopCount.get(),
                         dataSourceName,
-                        dataSourcesRuntimeConfig.dataSources().get(dataSourceName),
-                        dataSourcesReactiveRuntimeConfig.getDataSourceReactiveRuntimeConfig(dataSourceName),
-                        dataSourcesReactiveOracleConfig.dataSources().get(dataSourceName).reactive().oracle(),
+                        runtimeConfig.getValue().dataSources().get(dataSourceName),
+                        reactiveRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive(),
+                        reactiveOracleRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive().oracle(),
                         context);
 
                 shutdown.addShutdownTask(pool::close);
@@ -71,12 +98,13 @@ public class OraclePoolRecorder {
     }
 
     public Function<SyntheticCreationalContext<io.vertx.mutiny.oracleclient.OraclePool>, io.vertx.mutiny.oracleclient.OraclePool> mutinyOraclePool(
-            Function<SyntheticCreationalContext<OraclePool>, OraclePool> function) {
+            String dataSourceName) {
         return new Function<>() {
             @SuppressWarnings("unchecked")
             @Override
             public io.vertx.mutiny.oracleclient.OraclePool apply(SyntheticCreationalContext context) {
-                return io.vertx.mutiny.oracleclient.OraclePool.newInstance(function.apply(context));
+                return io.vertx.mutiny.oracleclient.OraclePool.newInstance(
+                        (OraclePool) context.getInjectedReference(OraclePool.class, qualifier(dataSourceName)));
             }
         };
     }
@@ -88,11 +116,7 @@ public class OraclePoolRecorder {
             DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig,
             DataSourceReactiveOracleConfig dataSourceReactiveOracleConfig,
             SyntheticCreationalContext<OraclePool> context) {
-        if (context.getInjectedReference(DataSourceSupport.class).getInactiveNames().contains(dataSourceName)) {
-            throw DataSourceUtil.dataSourceInactive(dataSourceName);
-        }
-        PoolOptions poolOptions = toPoolOptions(eventLoopCount, dataSourceRuntimeConfig, dataSourceReactiveRuntimeConfig,
-                dataSourceReactiveOracleConfig);
+        PoolOptions poolOptions = toPoolOptions(eventLoopCount, dataSourceReactiveRuntimeConfig);
         OracleConnectOptions oracleConnectOptions = toOracleConnectOptions(dataSourceName, dataSourceRuntimeConfig,
                 dataSourceReactiveRuntimeConfig, dataSourceReactiveOracleConfig);
         Supplier<Future<OracleConnectOptions>> databasesSupplier = toDatabasesSupplier(vertx, List.of(oracleConnectOptions),
@@ -116,10 +140,7 @@ public class OraclePoolRecorder {
         return supplier;
     }
 
-    private PoolOptions toPoolOptions(Integer eventLoopCount,
-            DataSourceRuntimeConfig dataSourceRuntimeConfig,
-            DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig,
-            DataSourceReactiveOracleConfig dataSourceReactiveOracleConfig) {
+    private PoolOptions toPoolOptions(Integer eventLoopCount, DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig) {
         PoolOptions poolOptions;
         poolOptions = new PoolOptions();
 
@@ -209,18 +230,13 @@ public class OraclePoolRecorder {
     private OraclePool createPool(Vertx vertx, PoolOptions poolOptions, OracleConnectOptions oracleConnectOptions,
             String dataSourceName, Supplier<Future<OracleConnectOptions>> databases,
             SyntheticCreationalContext<OraclePool> context) {
-        Instance<OraclePoolCreator> instance;
-        if (DataSourceUtil.isDefault(dataSourceName)) {
-            instance = context.getInjectedReference(TYPE_LITERAL);
-        } else {
-            instance = context.getInjectedReference(TYPE_LITERAL,
-                    new ReactiveDataSource.ReactiveDataSourceLiteral(dataSourceName));
-        }
+        Instance<OraclePoolCreator> instance = context.getInjectedReference(POOL_CREATOR_TYPE_LITERAL,
+                qualifier(dataSourceName));
         if (instance.isResolvable()) {
             OraclePoolCreator.Input input = new DefaultInput(vertx, poolOptions, oracleConnectOptions);
-            return instance.get().create(input);
+            return (OraclePool) instance.get().create(input);
         }
-        return OraclePool.pool(vertx, databases, poolOptions);
+        return (OraclePool) OracleDriver.INSTANCE.createPool(vertx, databases, poolOptions);
     }
 
     private static class DefaultInput implements OraclePoolCreator.Input {
@@ -248,5 +264,9 @@ public class OraclePoolRecorder {
         public OracleConnectOptions oracleConnectOptions() {
             return oracleConnectOptions;
         }
+    }
+
+    public RuntimeValue<OraclePoolSupport> createOraclePoolSupport(Set<String> oraclePoolNames) {
+        return new RuntimeValue<>(new OraclePoolSupport(oraclePoolNames));
     }
 }

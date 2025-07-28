@@ -1,5 +1,7 @@
 package io.quarkus.deployment.steps;
 
+import static io.quarkus.commons.classloading.ClassLoaderHelper.fromClassNameToResourceName;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -86,7 +88,7 @@ public class ClassTransformingBuildStep {
             ExecutorService buildExecutor,
             CuratedApplicationShutdownBuildItem shutdown)
             throws ExecutionException, InterruptedException {
-        if (bytecodeTransformerBuildItems.isEmpty() && classLoadingConfig.removedResources.isEmpty()
+        if (bytecodeTransformerBuildItems.isEmpty() && classLoadingConfig.removedResources().isEmpty()
                 && removedResourceBuildItems.isEmpty()) {
             return new TransformedClassesBuildItem(Collections.emptyMap());
         }
@@ -94,7 +96,6 @@ public class ClassTransformingBuildStep {
                 bytecodeTransformerBuildItems.size());
         Set<String> noConstScanning = new HashSet<>();
         Map<String, Set<String>> constScanning = new HashMap<>();
-        Set<String> eager = new HashSet<>();
         Set<String> nonCacheable = new HashSet<>();
         Map<String, Integer> classReaderOptions = new HashMap<>();
         for (BytecodeTransformerBuildItem i : bytecodeTransformerBuildItems) {
@@ -105,9 +106,6 @@ public class ClassTransformingBuildStep {
             } else {
                 constScanning.computeIfAbsent(i.getClassToTransform(), (s) -> new HashSet<>())
                         .addAll(i.getRequireConstPoolEntry());
-            }
-            if (i.isEager()) {
-                eager.add(i.getClassToTransform());
             }
             if (!i.isCacheable()) {
                 nonCacheable.add(i.getClassToTransform());
@@ -149,7 +147,7 @@ public class ClassTransformingBuildStep {
                 ClassLoader old = Thread.currentThread().getContextClassLoader();
                 try {
                     Thread.currentThread().setContextClassLoader(transformCl);
-                    String classFileName = className.replace('.', '/') + ".class";
+                    String classFileName = fromClassNameToResourceName(className);
                     List<ClassPathElement> archives = cl.getElementsWithResource(classFileName);
                     if (!archives.isEmpty()) {
                         ClassPathElement classPathElement = archives.get(0);
@@ -164,7 +162,7 @@ public class ClassTransformingBuildStep {
                                 classReaderOptions.getOrDefault(className, 0));
                         TransformedClassesBuildItem.TransformedClass transformedClass = new TransformedClassesBuildItem.TransformedClass(
                                 className, data,
-                                classFileName, eager.contains(className));
+                                classFileName);
                         return transformedClass.getData();
                     } else {
                         return originalBytes;
@@ -199,7 +197,7 @@ public class ClassTransformingBuildStep {
                     }
                 }
             }
-            String classFileName = className.replace('.', '/') + ".class";
+            String classFileName = fromClassNameToResourceName(className);
             List<ClassPathElement> archives = cl.getElementsWithResource(classFileName);
             if (!archives.isEmpty()) {
                 ClassPathElement classPathElement = archives.get(0);
@@ -241,7 +239,7 @@ public class ClassTransformingBuildStep {
                                     classReaderOptions.getOrDefault(className, 0));
                             TransformedClassesBuildItem.TransformedClass transformedClass = new TransformedClassesBuildItem.TransformedClass(
                                     className, data,
-                                    classFileName, eager.contains(className));
+                                    classFileName);
                             if (cacheable && launchModeBuildItem.getLaunchMode() == LaunchMode.DEVELOPMENT
                                     && classData != null) {
                                 transformedClassesCache.put(className, transformedClass);
@@ -279,7 +277,7 @@ public class ClassTransformingBuildStep {
             }
         }
 
-        if (packageConfig.writeTransformedBytecodeToBuildOutput && (launchMode.getLaunchMode() == LaunchMode.NORMAL)) {
+        if (packageConfig.writeTransformedBytecodeToBuildOutput() && (launchMode.getLaunchMode() == LaunchMode.NORMAL)) {
             // the idea here is to write the transformed classes into the build tool's output directory to make core coverage work
 
             for (Path path : archiveRoot.getRootDirectories()) {
@@ -316,7 +314,7 @@ public class ClassTransformingBuildStep {
             List<RemovedResourceBuildItem> removedResourceBuildItems) {
         //a little bit of a hack, but we use an empty transformed class to represent removed resources, as transforming a class removes it from the original archive
         Map<ArtifactKey, Set<String>> removed = new HashMap<>();
-        for (Map.Entry<String, Set<String>> entry : classLoadingConfig.removedResources.entrySet()) {
+        for (Map.Entry<String, Set<String>> entry : classLoadingConfig.removedResources().entrySet()) {
             removed.put(new GACT(entry.getKey().split(":")), entry.getValue());
         }
         for (RemovedResourceBuildItem i : removedResourceBuildItems) {
@@ -371,12 +369,13 @@ public class ClassTransformingBuildStep {
         } else {
             data = classData;
         }
-        if (BootstrapDebug.DEBUG_TRANSFORMED_CLASSES_DIR != null) {
-            File debugPath = new File(BootstrapDebug.DEBUG_TRANSFORMED_CLASSES_DIR);
+        var debugTransformedClassesDir = BootstrapDebug.transformedClassesDir();
+        if (debugTransformedClassesDir != null) {
+            File debugPath = new File(debugTransformedClassesDir);
             if (!debugPath.exists()) {
                 debugPath.mkdir();
             }
-            File classFile = new File(debugPath, className.replace('.', '/') + ".class");
+            File classFile = new File(debugPath, fromClassNameToResourceName(className));
             classFile.getParentFile().mkdirs();
             try (FileOutputStream classWriter = new FileOutputStream(classFile)) {
                 classWriter.write(data);

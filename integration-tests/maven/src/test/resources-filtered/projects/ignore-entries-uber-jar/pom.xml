@@ -14,7 +14,7 @@
     <maven.compiler.source>${maven.compiler.source}</maven.compiler.source>
     <maven.compiler.target>${maven.compiler.target}</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <quarkus.package.type>uber-jar</quarkus.package.type>
+    <quarkus.package.jar.type>uber-jar</quarkus.package.jar.type>
   </properties>
   <dependencyManagement>
     <dependencies>
@@ -32,7 +32,7 @@
     <!-- insert test dependencies here -->
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-resteasy</artifactId>
+      <artifactId>quarkus-rest</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
@@ -45,9 +45,7 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>\${compiler-plugin.version}</version>
         <configuration>
-          <compilerArgs>
-            <arg>-parameters</arg>
-          </compilerArgs>
+          <parameters>true</parameters>
         </configuration>
       </plugin>
       <plugin>

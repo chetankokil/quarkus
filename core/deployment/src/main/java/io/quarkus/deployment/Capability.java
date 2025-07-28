@@ -13,6 +13,11 @@ public interface Capability {
     String AGROAL = QUARKUS_PREFIX + ".agroal";
 
     /**
+     * An assistant implementation
+     */
+    String ASSISTANT = QUARKUS_PREFIX + ".assistant";
+
+    /**
      * JSR 365 compatible contexts and dependency injection
      */
     String CDI = QUARKUS_PREFIX + ".cdi";
@@ -68,6 +73,8 @@ public interface Capability {
     String RESTEASY_REACTIVE_JSON_JACKSON = RESTEASY_REACTIVE_JSON + ".jackson";
     String RESTEASY_REACTIVE_JSON_JSONB = RESTEASY_REACTIVE_JSON + ".jsonb";
 
+    String RESTEASY_MULTIPART = RESTEASY + ".multipart";
+
     String JWT = QUARKUS_PREFIX + ".jwt";
 
     /**
@@ -94,12 +101,14 @@ public interface Capability {
     String KUBERNETES_CLIENT = QUARKUS_PREFIX + ".kubernetes.client";
 
     /**
-     * @deprecated
+     * @deprecated Use more precise capability {@link Capability#SMALLRYE_METRICS}
      * @see io.quarkus.deployment.metrics.MetricsCapabilityBuildItem
      */
+    @Deprecated
     String METRICS = QUARKUS_PREFIX + ".metrics";
     String CONTAINER_IMAGE_JIB = QUARKUS_PREFIX + ".container.image.jib";
     String CONTAINER_IMAGE_DOCKER = QUARKUS_PREFIX + ".container.image.docker";
+    String CONTAINER_IMAGE_PODMAN = QUARKUS_PREFIX + ".container.image.podman";
     String CONTAINER_IMAGE_OPENSHIFT = QUARKUS_PREFIX + ".container.image.openshift";
     String CONTAINER_IMAGE_BUILDPACK = QUARKUS_PREFIX + ".container.image.buildpack";
     String HIBERNATE_ORM = QUARKUS_PREFIX + ".hibernate.orm";
@@ -107,20 +116,25 @@ public interface Capability {
     String HIBERNATE_REACTIVE = QUARKUS_PREFIX + ".hibernate.reactive";
     String HIBERNATE_VALIDATOR = QUARKUS_PREFIX + ".hibernate.validator";
     String OPENTELEMETRY_TRACER = QUARKUS_PREFIX + ".opentelemetry.tracer";
+    String OPENTELEMETRY_METRICS = QUARKUS_PREFIX + ".opentelemetry.metrics";
+    String OPENTELEMETRY_LOGS = QUARKUS_PREFIX + ".opentelemetry.logs";
 
     String OPENSHIFT = QUARKUS_PREFIX + ".openshift";
     String OPENSHIFT_CLIENT = OPENSHIFT + ".client";
 
     String OIDC = QUARKUS_PREFIX + ".oidc";
+    String OIDC_CLIENT = OIDC + ".client";
 
     String KEYCLOAK_AUTHORIZATION = QUARKUS_PREFIX + ".keycloak.authorization";
 
     String SCHEDULER = QUARKUS_PREFIX + ".scheduler";
 
+    String SMALLRYE_METRICS = QUARKUS_PREFIX + ".smallrye.metrics";
     String SMALLRYE_HEALTH = QUARKUS_PREFIX + ".smallrye.health";
     String SMALLRYE_OPENAPI = QUARKUS_PREFIX + ".smallrye.openapi";
     String SMALLRYE_GRAPHQL = QUARKUS_PREFIX + ".smallrye.graphql";
     String SMALLRYE_FAULT_TOLERANCE = QUARKUS_PREFIX + ".smallrye.faulttolerance";
+    String SMALLRYE_STORK = QUARKUS_PREFIX + ".smallrye.stork";
 
     String SPRING_WEB = QUARKUS_PREFIX + ".spring.web";
 
@@ -140,7 +154,12 @@ public interface Capability {
 
     String KAFKA = QUARKUS_PREFIX + ".kafka";
 
+    @Deprecated
+    /**
+     * @deprecated use {@link #MESSAGING} instead
+     */
     String SMALLRYE_REACTIVE_MESSAGING = QUARKUS_PREFIX + ".smallrye.reactive.messaging";
+    String MESSAGING = QUARKUS_PREFIX + ".messaging";
     String REDIS_CLIENT = QUARKUS_PREFIX + ".redis";
 
     String CACHE = QUARKUS_PREFIX + ".cache";
@@ -150,4 +169,8 @@ public interface Capability {
     String REACTIVE_MYSQL_CLIENT = QUARKUS_PREFIX + ".reactive-mysql-client";
     String REACTIVE_MSSQL_CLIENT = QUARKUS_PREFIX + ".reactive-mssql-client";
     String REACTIVE_DB2_CLIENT = QUARKUS_PREFIX + ".reactive-db2-client";
+
+    String GRPC = QUARKUS_PREFIX + ".grpc";
+
+    String WEBSOCKETS_NEXT = QUARKUS_PREFIX + ".websockets.next";
 }

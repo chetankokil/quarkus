@@ -39,17 +39,12 @@ public class OidcSessionImpl implements OidcSession {
         return oidcConfigUni.onItem().transformToUni(new Function<OidcTenantConfig, Uni<? extends Void>>() {
             @Override
             public Uni<Void> apply(OidcTenantConfig oidcConfig) {
+                OidcUtils.setClearSiteData(routingContext, oidcConfig);
                 return OidcUtils.removeSessionCookie(routingContext, oidcConfig,
                         resolver.getTokenStateManager());
             }
         });
 
-    }
-
-    @Override
-    public Instant expiresIn() {
-        final long nowSecs = System.currentTimeMillis() / 1000;
-        return Instant.ofEpochSecond(idToken.getExpirationTime() - nowSecs);
     }
 
     @Override

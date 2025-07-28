@@ -40,7 +40,7 @@ public class AssembleDownstreamDocumentation {
     private static final Path SOURCE_DOC_PATH = Path.of("src", "main", "asciidoc");
     private static final Path DOC_PATH = Path.of("target", "asciidoc", "sources");
     private static final Path INCLUDES_PATH = DOC_PATH.resolve("_includes");
-    private static final Path GENERATED_FILES_PATH = Path.of("..", "target", "asciidoc", "generated");
+    private static final Path GENERATED_DOC_FILES_PATH = Path.of("target", "quarkus-generated-doc");
     private static final Path IMAGES_PATH = DOC_PATH.resolve("images");
     private static final Path TARGET_ROOT_DIRECTORY = Path.of("target", "downstream-tree");
     private static final Path TARGET_IMAGES_DIRECTORY = TARGET_ROOT_DIRECTORY.resolve("images");
@@ -61,6 +61,15 @@ public class AssembleDownstreamDocumentation {
             Pattern.CASE_INSENSITIVE + Pattern.MULTILINE);
     private static final String SOURCE_BLOCK_PREFIX = "[source";
     private static final String SOURCE_BLOCK_DELIMITER = "--";
+    private static final Pattern FOOTNOTE_PATTERN = Pattern.compile("footnote:([a-z0-9_-]+)\\[(\\])?");
+
+    private static final Pattern TOOLTIP_PATTERN = Pattern.compile("tooltip:([a-z0-9_-]+)\\[(.*?)\\](, ?)?");
+    // A tooltip that is detected to be in the third column of a configuration reference table
+    // (a default value for a configuration property) - in this case, let's strip out the description from it.
+    // We assume it's in the third column if it follows right after a | at the beginning of a line (if it's in
+    // the second column, it would be preceded by a|, not just |).
+    private static final Pattern TOOLTIP_PATTERN_DEFAULT_COLUMN = Pattern.compile("^\\|tooltip:([a-z0-9_-]+)\\[(.*?)\\](, ?)?",
+            Pattern.MULTILINE);
 
     private static final String PROJECT_NAME_ATTRIBUTE = "{project-name}";
     private static final String RED_HAT_BUILD_OF_QUARKUS = "Red Hat build of Quarkus";
@@ -98,8 +107,9 @@ public class AssembleDownstreamDocumentation {
             throw new IllegalStateException(
                     "Transformed AsciiDoc sources directory does not exist. Have you built the documentation?");
         }
-        if (!Files.isDirectory(GENERATED_FILES_PATH)) {
-            throw new IllegalStateException("Generated files directory does not exist. Have you built the documentation?");
+        if (!Files.isDirectory(GENERATED_DOC_FILES_PATH)) {
+            throw new IllegalStateException("Generated files directory `" + GENERATED_DOC_FILES_PATH
+                    + "` does not exist. Have you built the documentation?");
         }
         Path referenceIndexPath = Path.of(args[0]);
         if (!Files.isReadable(Path.of(args[0]))) {
@@ -148,7 +158,7 @@ public class AssembleDownstreamDocumentation {
             Set<Path> guides = new TreeSet<>();
             Set<Path> simpleIncludes = new TreeSet<>();
             Set<Path> includes = new TreeSet<>();
-            Set<Path> generatedFiles = new TreeSet<>();
+            Set<Path> generatedDocFiles = new TreeSet<>();
             Set<Path> images = new TreeSet<>();
 
             Set<Path> allResolvedPaths = new TreeSet<>();
@@ -172,7 +182,7 @@ public class AssembleDownstreamDocumentation {
                 guides.add(guidePath);
                 simpleIncludes.addAll(guideContent.simpleIncludes);
                 includes.addAll(guideContent.includes);
-                generatedFiles.addAll(guideContent.generatedFiles);
+                generatedDocFiles.addAll(guideContent.generatedDocFiles);
                 images.addAll(guideContent.images);
             }
 
@@ -210,19 +220,10 @@ public class AssembleDownstreamDocumentation {
                 Files.createDirectories(targetFile.getParent());
                 copyAsciidoc(sourceFile, targetFile, downstreamGuides, titlesByReference, linkRewritingErrors);
             }
-            for (Path generatedFile : generatedFiles) {
-                Path sourceFile = GENERATED_FILES_PATH.resolve(generatedFile);
-                if (EXCLUDED_FILES.contains(sourceFile)) {
-                    continue;
-                }
-                if (!Files.isReadable(sourceFile)) {
-                    LOG.error("Unable to read generated file " + sourceFile);
-                }
-                allResolvedPaths.add(sourceFile);
-                Path targetFile = TARGET_GENERATED_DIRECTORY.resolve(generatedFile);
-                Files.createDirectories(targetFile.getParent());
-                copyAsciidoc(sourceFile, targetFile, downstreamGuides, titlesByReference, linkRewritingErrors);
-            }
+
+            copyGeneratedFiles(linkRewritingErrors, titlesByReference, allResolvedPaths,
+                    downstreamGuides, GENERATED_DOC_FILES_PATH, generatedDocFiles);
+
             for (Path image : images) {
                 Path sourceFile = IMAGES_PATH.resolve(image);
                 if (EXCLUDED_FILES.contains(sourceFile)) {
@@ -265,6 +266,25 @@ public class AssembleDownstreamDocumentation {
         }
     }
 
+    private static void copyGeneratedFiles(Map<String, List<String>> linkRewritingErrors, Map<String, String> titlesByReference,
+            Set<Path> allResolvedPaths, Set<String> downstreamGuides, Path generatedSourceFilesDirectory,
+            Set<Path> generatedFiles)
+            throws IOException {
+        for (Path generatedConfigDocFile : generatedFiles) {
+            Path sourceFile = generatedSourceFilesDirectory.resolve(generatedConfigDocFile);
+            if (EXCLUDED_FILES.contains(sourceFile)) {
+                continue;
+            }
+            if (!Files.isReadable(sourceFile)) {
+                LOG.error("Unable to read generated file " + sourceFile);
+            }
+            allResolvedPaths.add(sourceFile);
+            Path targetFile = TARGET_GENERATED_DIRECTORY.resolve(generatedConfigDocFile);
+            Files.createDirectories(targetFile.getParent());
+            copyAsciidoc(sourceFile, targetFile, downstreamGuides, titlesByReference, linkRewritingErrors);
+        }
+    }
+
     private static void getFiles(GuideContent guideContent, Path currentFile) throws IOException {
         List<String> lines = Files.readAllLines(currentFile);
 
@@ -275,9 +295,9 @@ public class AssembleDownstreamDocumentation {
                 getFurtherIncludes(guideContent, INCLUDES_PATH.resolve(possibleInclude.get()));
                 continue;
             }
-            Optional<Path> possibleGeneratedFile = extractPath(line, "include::{generated-dir}");
-            if (possibleGeneratedFile.isPresent()) {
-                guideContent.generatedFiles.add(possibleGeneratedFile.get());
+            Optional<Path> possibleGeneratedConfigDocFile = extractPath(line, "include::{generated-dir}");
+            if (possibleGeneratedConfigDocFile.isPresent()) {
+                guideContent.generatedDocFiles.add(possibleGeneratedConfigDocFile.get());
                 continue;
             }
             Optional<Path> possibleSimpleInclude = extractPath(line, "include::");
@@ -354,6 +374,15 @@ public class AssembleDownstreamDocumentation {
             lineNumber++;
 
             if (!documentTitleFound && line.startsWith("= ")) {
+                // anything in the buffer needs to be appended
+                // we don't need to rewrite it as before the title we can only have the preamble
+                // and we don't want to change anything in the preamble
+                // if at some point we want to adjust the preamble, make sure to do it in a separate method and not reuse rewriteContent
+                if (currentBuffer.length() > 0) {
+                    rewrittenGuide.append(currentBuffer);
+                    currentBuffer.setLength(0);
+                }
+
                 // this is the document title
                 rewrittenGuide.append(line.replace(PROJECT_NAME_ATTRIBUTE, RED_HAT_BUILD_OF_QUARKUS) + "\n");
                 documentTitleFound = true;
@@ -386,7 +415,7 @@ public class AssembleDownstreamDocumentation {
 
                 if (currentBuffer.length() > 0) {
                     rewrittenGuide.append(
-                            rewriteLinks(sourceFile.getFileName().toString(), currentBuffer.toString(), downstreamGuides,
+                            rewriteContent(sourceFile.getFileName().toString(), currentBuffer.toString(), downstreamGuides,
                                     titlesByReference, linkRewritingErrors));
                     currentBuffer.setLength(0);
                 }
@@ -399,7 +428,7 @@ public class AssembleDownstreamDocumentation {
 
         if (currentBuffer.length() > 0) {
             rewrittenGuide.append(
-                    rewriteLinks(sourceFile.getFileName().toString(), currentBuffer.toString(), downstreamGuides,
+                    rewriteContent(sourceFile.getFileName().toString(), currentBuffer.toString(), downstreamGuides,
                             titlesByReference, linkRewritingErrors));
         }
 
@@ -413,7 +442,7 @@ public class AssembleDownstreamDocumentation {
         Files.writeString(targetFile, rewrittenGuideWithoutTabs.trim());
     }
 
-    private static String rewriteLinks(String fileName,
+    private static String rewriteContent(String fileName,
             String content,
             Set<String> downstreamGuides,
             Map<String, String> titlesByReference,
@@ -425,7 +454,7 @@ public class AssembleDownstreamDocumentation {
                 addError(errors, fileName, "Unable to find title for: " + mr.group() + " [" + reference + "]");
                 title = "~~ unknown title ~~";
             }
-            return "xref:" + trimReference(mr.group(1)) + "[" + title.trim() + "]";
+            return "xref:" + trimReference(mr.group(1)) + "[" + escapeXrefTitleForReplaceAll(title) + "]";
         });
 
         content = ANGLE_BRACKETS_WITHOUT_DESCRIPTION_PATTERN.matcher(content).replaceAll(mr -> {
@@ -435,11 +464,11 @@ public class AssembleDownstreamDocumentation {
                 addError(errors, fileName, "Unable to find title for: " + mr.group() + " [" + reference + "]");
                 title = "~~ unknown title ~~";
             }
-            return "xref:" + trimReference(mr.group(1)) + "[" + title.trim() + "]";
+            return "xref:" + trimReference(mr.group(1)) + "[" + escapeXrefTitleForReplaceAll(title) + "]";
         });
 
         content = ANGLE_BRACKETS_WITH_DESCRIPTION_PATTERN.matcher(content).replaceAll(mr -> {
-            return "xref:" + trimReference(mr.group(1)) + "[" + mr.group(2).trim() + "]";
+            return "xref:" + trimReference(mr.group(1)) + "[" + escapeXrefTitleForReplaceAll(mr.group(2)) + "]";
         });
 
         content = XREF_GUIDE_PATTERN.matcher(content).replaceAll(mr -> {
@@ -454,7 +483,36 @@ public class AssembleDownstreamDocumentation {
             return "[[" + mr.group(1) + "]]";
         });
 
+        content = FOOTNOTE_PATTERN.matcher(content).replaceAll(mr -> {
+            if (mr.group(2) != null) {
+                return "footnoteref:[" + mr.group(1) + "]";
+            }
+
+            return "footnoteref:[" + mr.group(1) + ", ";
+        });
+
+        content = TOOLTIP_PATTERN_DEFAULT_COLUMN.matcher(content).replaceAll(mr -> {
+            // for tooltips in the third column of the configuration reference table (the default values),
+            // don't include the description, just the plain value
+            return "|*" + mr.group(1) + "*";
+        });
+
+        content = TOOLTIP_PATTERN.matcher(content).replaceAll(mr -> {
+            // group(1) is the enum value, group(2) is the tooltip text for the value
+            if (mr.group(3) != null) {
+                // group(3) is a comma that means there are still more values after this one
+                // So in this case, replace it with two newlines to visually separate items
+                return "*" + mr.group(1) + "*: " + mr.group(2) + "\n\n";
+            } else {
+                return "*" + mr.group(1) + "*: " + mr.group(2);
+            }
+        });
+
         return content;
+    }
+
+    private static String escapeXrefTitleForReplaceAll(String title) {
+        return title.trim().replace("]", "\\\\]");
     }
 
     private static String trimReference(String reference) {
@@ -514,7 +572,7 @@ public class AssembleDownstreamDocumentation {
         public Set<Path> simpleIncludes = new TreeSet<>();
         public Set<Path> includes = new TreeSet<>();
         public Set<Path> images = new TreeSet<>();
-        public Set<Path> generatedFiles = new TreeSet<>();
+        public Set<Path> generatedDocFiles = new TreeSet<>();
 
         public GuideContent(Path guide) {
             this.guide = guide;

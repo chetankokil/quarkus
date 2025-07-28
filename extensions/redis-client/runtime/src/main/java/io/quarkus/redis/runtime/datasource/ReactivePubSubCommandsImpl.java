@@ -194,10 +194,10 @@ public class ReactivePubSubCommandsImpl<V> extends AbstractRedisCommands impleme
 
         for (String channel : channels) {
             if (channel == null) {
-                throw new IllegalArgumentException("Channels must not be null");
+                return Uni.createFrom().failure(new IllegalArgumentException("Channels must not be null"));
             }
             if (channel.isBlank()) {
-                throw new IllegalArgumentException("Channels cannot be blank");
+                return Uni.createFrom().failure(new IllegalArgumentException("Channels cannot be blank"));
             }
         }
 
@@ -260,10 +260,14 @@ public class ReactivePubSubCommandsImpl<V> extends AbstractRedisCommands impleme
 
         List<String> list = List.of(channels);
         return Multi.createFrom().emitter(emitter -> {
-            subscribe(list, (channel, value) -> new DefaultRedisPubSubMessage<>(value, channel), emitter::complete,
-                    emitter::fail)
-                    .subscribe().with(subscriber -> emitter
-                            .onTermination(() -> subscriber.unsubscribe(channels).subscribe().asCompletionStage()));
+            subscribe(list,
+                    (channel, value) -> emitter.emit(new DefaultRedisPubSubMessage<>(value, channel)),
+                    emitter::complete, emitter::fail)
+                    .subscribe().with(x -> {
+                        emitter.onTermination(() -> {
+                            x.unsubscribe(channels).subscribe().asCompletionStage();
+                        });
+                    }, emitter::fail);
         });
     }
 

@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import io.quarkus.micrometer.runtime.config.runtime.HttpClientConfig;
 import io.quarkus.micrometer.runtime.config.runtime.HttpServerConfig;
@@ -32,14 +33,32 @@ public class RequestMetricInfoTest {
     }
 
     @Test
+    public void testParsePathSingleSlash() {
+        String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS, "/");
+        Assertions.assertEquals("/", path);
+    }
+
+    @Test
     public void testParsePathDoubleSlash() {
         String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS, "//");
         Assertions.assertEquals("/", path);
     }
 
     @Test
+    public void testParsePathMultipleSlash() {
+        String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS, "/////");
+        Assertions.assertEquals("/", path);
+    }
+
+    @Test
     public void testParseEmptyPath() {
         String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS, "");
+        Assertions.assertEquals("/", path);
+    }
+
+    @Test
+    public void testParseNullPath() {
+        String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS, null);
         Assertions.assertEquals("/", path);
     }
 
@@ -51,6 +70,20 @@ public class RequestMetricInfoTest {
     }
 
     @Test
+    public void testParsePathNoEndSlash() {
+        String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS,
+                "/path/with/no/end/slash/");
+        Assertions.assertEquals("/path/with/no/end/slash", path);
+    }
+
+    @Test
+    public void testParsePathNoEndDoubleSlash() {
+        String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, NO_IGNORE_PATTERNS,
+                "/path/with/no/end/double/slash///////");
+        Assertions.assertEquals("/path/with/no/end/double/slash", path);
+    }
+
+    @Test
     public void testParsePathIgnoreNoLeadingSlash() {
         String path = requestMetric.getNormalizedUriPath(NO_MATCH_PATTERNS, ignorePatterns,
                 "ignore/me/with/no/leading/slash");
@@ -59,13 +92,14 @@ public class RequestMetricInfoTest {
 
     @Test
     public void testHttpServerMetricsIgnorePatterns() {
-        HttpServerConfig serverConfig = new HttpServerConfig();
-        serverConfig.ignorePatterns = Optional.of(new ArrayList<>(Arrays.asList(" /item/.* ", " /oranges/.* ")));
-
+        HttpServerConfig httpServerConfig = Mockito.mock(HttpServerConfig.class);
+        Mockito.doReturn(Optional.of(new ArrayList<>(Arrays.asList(" /item/.* ", " /oranges/.* "))))
+                .when(httpServerConfig).ignorePatterns();
+        HttpClientConfig httpClientConfig = Mockito.mock(HttpClientConfig.class);
+        VertxConfig vertxConfig = Mockito.mock(VertxConfig.class);
         HttpBinderConfiguration binderConfig = new HttpBinderConfiguration(
                 true, false,
-                serverConfig, new HttpClientConfig(), new VertxConfig());
-
+                httpServerConfig, httpClientConfig, vertxConfig);
         Assertions.assertEquals(2, binderConfig.serverIgnorePatterns.size());
 
         Pattern p = binderConfig.serverIgnorePatterns.get(0);
@@ -97,13 +131,16 @@ public class RequestMetricInfoTest {
 
     @Test
     public void testHttpServerMetricsMatchPatterns() {
-        HttpServerConfig serverConfig = new HttpServerConfig();
-        serverConfig.matchPatterns = Optional
-                .of(new ArrayList<>(Arrays.asList(" /item/\\d+=/item/{id} ", "  /msg/\\d+=/msg/{other} ")));
 
+        HttpServerConfig httpServerConfig = Mockito.mock(HttpServerConfig.class);
+        Mockito.doReturn(Optional
+                .of(new ArrayList<>(Arrays.asList(" /item/\\d+=/item/{id} ", "  /msg/\\d+=/msg/{other} "))))
+                .when(httpServerConfig).matchPatterns();
+        HttpClientConfig httpClientConfig = Mockito.mock(HttpClientConfig.class);
+        VertxConfig vertxConfig = Mockito.mock(VertxConfig.class);
         HttpBinderConfiguration binderConfig = new HttpBinderConfiguration(
                 true, false,
-                serverConfig, new HttpClientConfig(), new VertxConfig());
+                httpServerConfig, httpClientConfig, vertxConfig);
 
         Assertions.assertFalse(binderConfig.serverMatchPatterns.isEmpty());
         Iterator<Map.Entry<Pattern, String>> i = binderConfig.serverMatchPatterns.entrySet().iterator();

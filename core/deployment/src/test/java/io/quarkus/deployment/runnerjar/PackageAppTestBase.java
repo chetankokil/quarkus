@@ -1,9 +1,9 @@
 package io.quarkus.deployment.runnerjar;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -18,6 +18,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 import java.util.stream.Collectors;
@@ -33,13 +34,14 @@ import io.quarkus.bootstrap.resolver.BootstrapTestBase;
 import io.quarkus.bootstrap.resolver.TsArtifact;
 import io.quarkus.bootstrap.resolver.TsArtifact.ContentProvider;
 import io.quarkus.bootstrap.resolver.TsDependency;
+import io.quarkus.builder.BuildResult;
 import io.quarkus.maven.dependency.ArtifactDependency;
 import io.quarkus.maven.dependency.Dependency;
 import io.quarkus.maven.dependency.ResolvedDependency;
 
 public abstract class PackageAppTestBase extends BootstrapTestBase {
 
-    private static final String LIB_PREFIX = "lib/";
+    private static final String LIB_BOOT_PREFIX = "lib/boot/";
     private static final String MAIN_CLS = "io.quarkus.bootstrap.runner.QuarkusEntryPoint";
 
     protected List<String> expectedLib = new ArrayList<>();
@@ -48,9 +50,6 @@ public abstract class PackageAppTestBase extends BootstrapTestBase {
 
     protected void addToExpectedLib(TsArtifact entry) {
         expectedLib.add(entry.getGroupId() + '.' + entry.getArtifactId() + '-' + entry.getVersion() + '.' + entry.getType());
-    }
-
-    protected void assertDeploymentDep(Set<Dependency> deploymentDeps) throws Exception {
     }
 
     protected void assertAppModel(ApplicationModel appModel) throws Exception {
@@ -133,17 +132,58 @@ public abstract class PackageAppTestBase extends BootstrapTestBase {
         return set;
     }
 
-    @Override
-    protected void testBootstrap(QuarkusBootstrap creator) throws Exception {
-        CuratedApplication curated = creator.bootstrap();
+    /**
+     * Overriding this method allows performing a custom build targeting specific build items.
+     *
+     * @return alternative build items that should be produced instead of the default packaging ones
+     */
+    protected Class<?>[] targetBuildItems() {
+        return null;
+    }
+
+    private AugmentAction initAugmentAction(QuarkusBootstrap creator) throws Exception {
+        final CuratedApplication curated = creator.bootstrap();
         assertAppModel(curated.getApplicationModel());
         final String[] expectedExtensions = expectedExtensionDependencies();
         if (expectedExtensions != null) {
             assertExtensionDependencies(curated.getApplicationModel(), expectedExtensions);
         }
-        AugmentAction action = curated.createAugmentor();
-        AugmentResult outcome = action.createProductionApplication();
+        return curated.createAugmentor();
+    }
 
+    @Override
+    protected void testBootstrap(QuarkusBootstrap bootstrap) throws Exception {
+        testAugmentResult(initAugmentAction(bootstrap));
+    }
+
+    protected void testAugmentResult(AugmentAction augmentAction) throws Exception {
+        final Class<?>[] targetBuildItems = targetBuildItems();
+        if (targetBuildItems == null) {
+            assertAugmentOutcome(augmentAction.createProductionApplication());
+        } else {
+            augmentAction.performCustomBuild(CustomBuildConsumer.class.getName(), this, toClassNames(targetBuildItems));
+        }
+    }
+
+    private static String[] toClassNames(Class<?>[] classes) {
+        final String[] arr = new String[classes.length];
+        for (int i = 0; i < classes.length; ++i) {
+            arr[i] = classes[i].getName();
+        }
+        return arr;
+    }
+
+    public static class CustomBuildConsumer implements BiConsumer<PackageAppTestBase, BuildResult> {
+        @Override
+        public void accept(PackageAppTestBase test, BuildResult buildResult) {
+            test.assertBuildResult(buildResult);
+        }
+    }
+
+    protected void assertBuildResult(BuildResult result) {
+    }
+
+    private void assertAugmentOutcome(AugmentResult outcome) throws IOException {
         final Path libDir = outcome.getJar().getLibraryDir();
         assertTrue(Files.isDirectory(libDir));
         final Path bootLibDir = libDir.resolve("boot");
@@ -169,44 +209,16 @@ public abstract class PackageAppTestBase extends BootstrapTestBase {
                     .toArray(String[]::new);
             assertEquals(actualBootLib.size(), cpEntries.length);
             for (String entry : cpEntries) {
-                assertTrue(entry.startsWith(LIB_PREFIX));
-                assertTrue(actualBootLib.contains(entry.substring(LIB_PREFIX.length())));
+                assertThat(entry).startsWith(LIB_BOOT_PREFIX);
+                String entryFile = entry.substring(LIB_BOOT_PREFIX.length());
+                assertThat(actualBootLib).contains(entryFile);
             }
         }
+        assertLibDirectoryContent(actualMainLib);
+    }
 
-        List<String> missingEntries = List.of();
-        for (String entry : expectedLib) {
-            if (!actualMainLib.remove(entry)) {
-                if (missingEntries.isEmpty()) {
-                    missingEntries = new ArrayList<>();
-                }
-                missingEntries.add(entry);
-            }
-        }
-
-        StringBuilder buf = null;
-        if (!missingEntries.isEmpty()) {
-            buf = new StringBuilder();
-            buf.append("Missing entries: ").append(missingEntries.get(0));
-            for (int i = 1; i < missingEntries.size(); ++i) {
-                buf.append(", ").append(missingEntries.get(i));
-            }
-        }
-        if (!actualMainLib.isEmpty()) {
-            if (buf == null) {
-                buf = new StringBuilder();
-            } else {
-                buf.append("; ");
-            }
-            final Iterator<String> i = actualMainLib.iterator();
-            buf.append("Extra entries: ").append(i.next());
-            while (i.hasNext()) {
-                buf.append(", ").append(i.next());
-            }
-        }
-        if (buf != null) {
-            fail(buf.toString());
-        }
+    protected void assertLibDirectoryContent(Set<String> actualMainLib) {
+        assertThat(actualMainLib).containsExactlyInAnyOrderElementsOf(expectedLib);
     }
 
     protected Set<String> getDirContent(final Path dir) throws IOException {

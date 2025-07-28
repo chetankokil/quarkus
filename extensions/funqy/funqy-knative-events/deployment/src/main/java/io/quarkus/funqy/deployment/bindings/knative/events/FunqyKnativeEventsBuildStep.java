@@ -20,14 +20,12 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.funqy.deployment.FunctionBuildItem;
 import io.quarkus.funqy.deployment.FunctionInitializedBuildItem;
-import io.quarkus.funqy.runtime.FunqyConfig;
-import io.quarkus.funqy.runtime.bindings.knative.events.FunqyKnativeEventsConfig;
 import io.quarkus.funqy.runtime.bindings.knative.events.KnativeEventsBindingRecorder;
 import io.quarkus.jackson.runtime.ObjectMapperProducer;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.quarkus.vertx.http.deployment.RequireBodyHandlerBuildItem;
 import io.quarkus.vertx.http.deployment.RouteBuildItem;
-import io.quarkus.vertx.http.runtime.HttpBuildTimeConfig;
+import io.quarkus.vertx.http.runtime.VertxHttpBuildTimeConfig;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
 
@@ -66,8 +64,6 @@ public class FunqyKnativeEventsBuildStep {
     @BuildStep
     @Record(RUNTIME_INIT)
     public void boot(ShutdownContextBuildItem shutdown,
-            FunqyConfig funqyConfig,
-            FunqyKnativeEventsConfig eventsConfig,
             KnativeEventsBindingRecorder binding,
             Optional<FunctionInitializedBuildItem> hasFunctions,
             List<FunctionBuildItem> functions,
@@ -75,21 +71,21 @@ public class FunqyKnativeEventsBuildStep {
             BuildProducer<RouteBuildItem> routes,
             CoreVertxBuildItem vertx,
             BeanContainerBuildItem beanContainer,
-            HttpBuildTimeConfig httpConfig,
-            ExecutorBuildItem executorBuildItem) throws Exception {
+            VertxHttpBuildTimeConfig httpBuildTimeConfig,
+            ExecutorBuildItem executorBuildItem) {
         if (!hasFunctions.isPresent() || hasFunctions.get() == null)
             return;
 
         feature.produce(new FeatureBuildItem(FUNQY_KNATIVE_FEATURE));
 
-        String rootPath = httpConfig.rootPath;
+        String rootPath = httpBuildTimeConfig.rootPath();
         if (rootPath == null) {
             rootPath = "/";
         } else if (!rootPath.endsWith("/")) {
             rootPath += "/";
         }
 
-        Handler<RoutingContext> handler = binding.start(rootPath, funqyConfig, eventsConfig, vertx.getVertx(),
+        Handler<RoutingContext> handler = binding.start(rootPath, vertx.getVertx(),
                 shutdown,
                 beanContainer.getValue(),
                 executorBuildItem.getExecutorProxy());

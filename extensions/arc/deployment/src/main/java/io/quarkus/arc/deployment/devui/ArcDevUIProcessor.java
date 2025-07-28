@@ -13,13 +13,13 @@ import io.quarkus.arc.deployment.ArcConfig;
 import io.quarkus.arc.deployment.BeanDefiningAnnotationBuildItem;
 import io.quarkus.arc.deployment.CustomScopeAnnotationsBuildItem;
 import io.quarkus.arc.processor.AnnotationsTransformer;
-import io.quarkus.arc.runtime.devconsole.InvocationInterceptor;
-import io.quarkus.arc.runtime.devconsole.InvocationTree;
-import io.quarkus.arc.runtime.devconsole.InvocationsMonitor;
-import io.quarkus.arc.runtime.devconsole.Monitored;
-import io.quarkus.arc.runtime.devmode.EventsMonitor;
-import io.quarkus.arc.runtime.devui.ArcJsonRPCService;
-import io.quarkus.deployment.IsDevelopment;
+import io.quarkus.arc.runtime.dev.EventsMonitor;
+import io.quarkus.arc.runtime.dev.console.InvocationInterceptor;
+import io.quarkus.arc.runtime.dev.console.InvocationTree;
+import io.quarkus.arc.runtime.dev.console.InvocationsMonitor;
+import io.quarkus.arc.runtime.dev.console.Monitored;
+import io.quarkus.arc.runtime.dev.ui.ArcJsonRPCService;
+import io.quarkus.deployment.IsLocalDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.devui.spi.JsonRPCProvidersBuildItem;
@@ -28,11 +28,14 @@ import io.quarkus.devui.spi.page.Page;
 
 public class ArcDevUIProcessor {
 
-    @BuildStep(onlyIf = IsDevelopment.class)
+    @BuildStep(onlyIf = IsLocalDevelopment.class)
     public CardPageBuildItem pages(ArcBeanInfoBuildItem arcBeanInfoBuildItem, ArcConfig config) {
         DevBeanInfos beanInfos = arcBeanInfoBuildItem.getBeanInfos();
 
         CardPageBuildItem pageBuildItem = new CardPageBuildItem();
+        pageBuildItem.setLogo("cdi_logo.png", "cdi_logo.png");
+        pageBuildItem.addLibraryVersion("jakarta.enterprise", "jakarta.enterprise.cdi-api", "Jakarta CDI",
+                "https://jakarta.ee/specifications/cdi/");
 
         List<DevBeanInfo> beans = beanInfos.getBeans();
         if (!beans.isEmpty()) {
@@ -77,7 +80,7 @@ public class ArcDevUIProcessor {
             pageBuildItem.addBuildTimeData(DECORATORS, decorators);
         }
 
-        if (config.devMode.monitoringEnabled) {
+        if (config.devMode().monitoringEnabled()) {
             pageBuildItem.addPage(Page.webComponentPageBuilder()
                     .icon("font-awesome-solid:fire")
                     .componentLink("qwc-arc-fired-events.js"));
@@ -102,19 +105,19 @@ public class ArcDevUIProcessor {
         return pageBuildItem;
     }
 
-    @BuildStep(onlyIf = IsDevelopment.class)
+    @BuildStep(onlyIf = IsLocalDevelopment.class)
     JsonRPCProvidersBuildItem createJsonRPCService() {
         return new JsonRPCProvidersBuildItem(ArcJsonRPCService.class);
     }
 
-    @BuildStep(onlyIf = IsDevelopment.class)
+    @BuildStep(onlyIf = IsLocalDevelopment.class)
     void registerMonitoringComponents(ArcConfig config, BuildProducer<AdditionalBeanBuildItem> beans,
             BuildProducer<AnnotationsTransformerBuildItem> annotationTransformers,
             CustomScopeAnnotationsBuildItem customScopes, List<BeanDefiningAnnotationBuildItem> beanDefiningAnnotations) {
-        if (!config.devMode.monitoringEnabled) {
+        if (!config.devMode().monitoringEnabled()) {
             return;
         }
-        if (!config.transformUnproxyableClasses) {
+        if (!config.transformUnproxyableClasses()) {
             throw new IllegalStateException(
                     "Dev UI problem: monitoring of CDI business method invocations not possible\n\t- quarkus.arc.transform-unproxyable-classes was set to false and therefore it would not be possible to apply interceptors to unproxyable bean classes\n\t- please disable the monitoring feature via quarkus.arc.dev-mode.monitoring-enabled=false or enable unproxyable classes transformation");
         }

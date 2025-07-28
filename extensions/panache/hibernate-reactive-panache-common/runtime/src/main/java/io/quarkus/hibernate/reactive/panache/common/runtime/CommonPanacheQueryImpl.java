@@ -38,7 +38,12 @@ public class CommonPanacheQueryImpl<Entity> {
      * this is the original Panache-Query, if any (can be null)
      */
     private String originalQuery;
-    protected String countQuery;
+    /**
+     * This is only used by the Spring Data JPA extension, due to Spring's Query annotation allowing a custom count query
+     * See https://docs.spring.io/spring-data/jpa/reference/jpa/query-methods.html#jpa.query-methods.at-query.native
+     * Otherwise we do not use this, and rely on ORM to generate count queries
+     */
+    protected String customCountQueryForSpring;
     private String orderBy;
     private Uni<Mutiny.Session> em;
 
@@ -51,6 +56,7 @@ public class CommonPanacheQueryImpl<Entity> {
     private Map<String, Object> hints;
 
     private Map<String, Map<String, Object>> filters;
+    private Class<?> projectionType;
 
     public CommonPanacheQueryImpl(Uni<Mutiny.Session> em, String query, String originalQuery, String orderBy,
             Object paramsArrayOrMap) {
@@ -61,10 +67,12 @@ public class CommonPanacheQueryImpl<Entity> {
         this.paramsArrayOrMap = paramsArrayOrMap;
     }
 
-    private CommonPanacheQueryImpl(CommonPanacheQueryImpl<?> previousQuery, String newQueryString, String countQuery) {
+    private CommonPanacheQueryImpl(CommonPanacheQueryImpl<?> previousQuery, String newQueryString,
+            String customCountQueryForSpring,
+            Class<?> projectionType) {
         this.em = previousQuery.em;
         this.query = newQueryString;
-        this.countQuery = countQuery;
+        this.customCountQueryForSpring = customCountQueryForSpring;
         this.orderBy = previousQuery.orderBy;
         this.paramsArrayOrMap = previousQuery.paramsArrayOrMap;
         this.page = previousQuery.page;
@@ -73,6 +81,7 @@ public class CommonPanacheQueryImpl<Entity> {
         this.lockModeType = previousQuery.lockModeType;
         this.hints = previousQuery.hints;
         this.filters = previousQuery.filters;
+        this.projectionType = projectionType;
     }
 
     // Builder
@@ -83,38 +92,24 @@ public class CommonPanacheQueryImpl<Entity> {
             selectQuery = NamedQueryUtil.getNamedQuery(query.substring(1));
         }
 
-        String lowerCasedTrimmedQuery = selectQuery.trim().toLowerCase();
-        if (lowerCasedTrimmedQuery.startsWith("select new ")) {
-            throw new PanacheQueryException("Unable to perform a projection on a 'select new' query: " + query);
+        String lowerCasedTrimmedQuery = PanacheJpaUtil.trimForAnalysis(selectQuery);
+        if (lowerCasedTrimmedQuery.startsWith("select new ")
+                || lowerCasedTrimmedQuery.startsWith("select distinct new ")) {
+            throw new PanacheQueryException("Unable to perform a projection on a 'select [distinct]? new' query: " + query);
         }
 
-        // If the query starts with a select clause, we generate an HQL query
-        // using the fields in the select clause:
-        // Initial query: select e.field1, e.field2 from EntityClass e
-        // New query: SELECT new org.acme.ProjectionClass(e.field1, e.field2) from EntityClass e
+        // If the query starts with a select clause, we pass it on to ORM which can handle that via a projection type
         if (lowerCasedTrimmedQuery.startsWith("select ")) {
-            int endSelect = lowerCasedTrimmedQuery.indexOf(" from ");
-            String trimmedQuery = selectQuery.trim();
-            // 7 is the length of "select "
-            String selectClause = trimmedQuery.substring(7, endSelect).trim();
-            String from = trimmedQuery.substring(endSelect);
-            StringBuilder newQuery = new StringBuilder("select ");
-            // Handle select-distinct. HQL example: select distinct new org.acme.ProjectionClass...
-            boolean distinctQuery = selectClause.toLowerCase().startsWith("distinct ");
-            if (distinctQuery) {
-                // 9 is the length of "distinct "
-                selectClause = selectClause.substring(9).trim();
-                newQuery.append("distinct ");
-            }
-
-            newQuery.append("new ").append(type.getName()).append("(").append(selectClause).append(")").append(from);
-            return new CommonPanacheQueryImpl<>(this, newQuery.toString(), "select count(*) " + from);
+            // I think projections do not change the result count, so we can keep the custom count query
+            return new CommonPanacheQueryImpl<>(this, query, customCountQueryForSpring, type);
         }
+
+        // FIXME: this assumes the query starts with "FROM " probably?
 
         // build select clause with a constructor expression
         String selectClause = "SELECT " + getParametersFromClass(type, null);
-        return new CommonPanacheQueryImpl<>(this, selectClause + selectQuery,
-                "select count(*) " + selectQuery);
+        // I think projections do not change the result count, so we can keep the custom count query
+        return new CommonPanacheQueryImpl<>(this, selectClause + selectQuery, customCountQueryForSpring, null);
     }
 
     private StringBuilder getParametersFromClass(Class<?> type, String parentParameter) {
@@ -274,39 +269,31 @@ public class CommonPanacheQueryImpl<Entity> {
 
     @SuppressWarnings("unchecked")
     public Uni<Long> count() {
-        String selectQuery;
-        if (PanacheJpaUtil.isNamedQuery(query)) {
-            selectQuery = NamedQueryUtil.getNamedQuery(query.substring(1));
-        } else {
-            selectQuery = query;
-        }
-
         if (count == null) {
             // FIXME: question about caching the result here
             count = em.flatMap(session -> {
-                Mutiny.Query<Long> countQuery = session.createQuery(countQuery(selectQuery));
-                if (paramsArrayOrMap instanceof Map)
-                    AbstractJpaOperations.bindParameters(countQuery, (Map<String, Object>) paramsArrayOrMap);
-                else
-                    AbstractJpaOperations.bindParameters(countQuery, (Object[]) paramsArrayOrMap);
-                return applyFilters(session, () -> countQuery.getSingleResult());
+                if (customCountQueryForSpring != null) {
+                    Mutiny.SelectionQuery<Long> countQuery = session.createSelectionQuery(customCountQueryForSpring,
+                            Long.class);
+                    if (paramsArrayOrMap instanceof Map)
+                        AbstractJpaOperations.bindParameters(countQuery, (Map<String, Object>) paramsArrayOrMap);
+                    else
+                        AbstractJpaOperations.bindParameters(countQuery, (Object[]) paramsArrayOrMap);
+                    return applyFilters(session, () -> countQuery.getSingleResult());
+                } else {
+                    Mutiny.SelectionQuery<?> query = createBaseQuery(session);
+                    return applyFilters(session, () -> query.getResultCount());
+                }
             });
         }
         return count;
     }
 
-    private String countQuery(String selectQuery) {
-        if (countQuery != null) {
-            return countQuery;
-        }
-        return PanacheJpaUtil.getFastCountQuery(selectQuery);
-    }
-
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public <T extends Entity> Uni<List<T>> list() {
         return em.flatMap(session -> {
-            Mutiny.Query<?> jpaQuery = createQuery(session);
-            return (Uni) applyFilters(session, () -> jpaQuery.getResultList());
+            Mutiny.SelectionQuery<?> hibernateQuery = createQuery(session);
+            return (Uni) applyFilters(session, () -> hibernateQuery.getResultList());
         });
     }
 
@@ -323,7 +310,7 @@ public class CommonPanacheQueryImpl<Entity> {
     @SuppressWarnings("unchecked")
     public <T extends Entity> Uni<T> firstResult() {
         return em.flatMap(session -> {
-            Mutiny.Query<?> jpaQuery = createQuery(session, 1);
+            Mutiny.SelectionQuery<?> jpaQuery = createQuery(session, 1);
             return applyFilters(session, () -> jpaQuery.getResultList().map(list -> list.isEmpty() ? null : (T) list.get(0)));
         });
     }
@@ -331,15 +318,15 @@ public class CommonPanacheQueryImpl<Entity> {
     @SuppressWarnings("unchecked")
     public <T extends Entity> Uni<T> singleResult() {
         return em.flatMap(session -> {
-            Mutiny.Query<?> jpaQuery = createQuery(session);
+            Mutiny.SelectionQuery<?> jpaQuery = createQuery(session);
             return applyFilters(session, () -> jpaQuery.getSingleResult().map(v -> (T) v))
                     // FIXME: workaround https://github.com/hibernate/hibernate-reactive/issues/263
                     .onFailure(CompletionException.class).transform(t -> t.getCause());
         });
     }
 
-    private Mutiny.Query<?> createQuery(Mutiny.Session em) {
-        Mutiny.Query<?> jpaQuery = createBaseQuery(em);
+    private Mutiny.SelectionQuery<?> createQuery(Mutiny.Session em) {
+        Mutiny.SelectionQuery<?> jpaQuery = createBaseQuery(em);
 
         if (range != null) {
             jpaQuery.setFirstResult(range.getStartIndex());
@@ -364,8 +351,8 @@ public class CommonPanacheQueryImpl<Entity> {
         return jpaQuery;
     }
 
-    private Mutiny.Query<?> createQuery(Mutiny.Session em, int maxResults) {
-        Mutiny.Query<?> jpaQuery = createBaseQuery(em);
+    private Mutiny.SelectionQuery<?> createQuery(Mutiny.Session em, int maxResults) {
+        Mutiny.SelectionQuery<?> jpaQuery = createBaseQuery(em);
 
         if (range != null) {
             jpaQuery.setFirstResult(range.getStartIndex());
@@ -385,27 +372,28 @@ public class CommonPanacheQueryImpl<Entity> {
     }
 
     @SuppressWarnings("unchecked")
-    private Mutiny.Query<?> createBaseQuery(Mutiny.Session em) {
-        Mutiny.Query<?> jpaQuery;
+    private Mutiny.SelectionQuery<?> createBaseQuery(Mutiny.Session em) {
+        Mutiny.SelectionQuery<?> hibernateQuery;
         if (PanacheJpaUtil.isNamedQuery(query)) {
             String namedQuery = query.substring(1);
-            jpaQuery = em.createNamedQuery(namedQuery);
+            hibernateQuery = projectionType == null ? em.createNamedQuery(namedQuery)
+                    : em.createNamedQuery(namedQuery, projectionType);
         } else {
             try {
-                jpaQuery = em.createQuery(orderBy != null ? query + orderBy : query);
-            } catch (IllegalArgumentException x) {
+                hibernateQuery = em.createSelectionQuery(orderBy != null ? query + orderBy : query, projectionType);
+            } catch (RuntimeException x) {
                 throw NamedQueryUtil.checkForNamedQueryMistake(x, originalQuery);
             }
         }
 
         if (paramsArrayOrMap instanceof Map) {
-            AbstractJpaOperations.bindParameters(jpaQuery, (Map<String, Object>) paramsArrayOrMap);
+            AbstractJpaOperations.bindParameters(hibernateQuery, (Map<String, Object>) paramsArrayOrMap);
         } else {
-            AbstractJpaOperations.bindParameters(jpaQuery, (Object[]) paramsArrayOrMap);
+            AbstractJpaOperations.bindParameters(hibernateQuery, (Object[]) paramsArrayOrMap);
         }
 
         if (this.lockModeType != null) {
-            jpaQuery.setLockMode(lockModeType);
+            hibernateQuery.setLockMode(lockModeType);
         }
 
         if (hints != null) {
@@ -414,7 +402,7 @@ public class CommonPanacheQueryImpl<Entity> {
             //                jpaQuery.setHint(hint.getKey(), hint.getValue());
             //            }
         }
-        return jpaQuery;
+        return hibernateQuery;
     }
 
     private <T> Uni<T> applyFilters(Mutiny.Session em, Supplier<Uni<T>> uni) {

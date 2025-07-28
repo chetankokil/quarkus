@@ -21,6 +21,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import jakarta.enterprise.inject.spi.DeploymentException;
 import jakarta.transaction.Transaction;
@@ -51,12 +52,13 @@ import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.BeanInfo;
+import io.quarkus.arc.processor.BeanStream;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.deployment.ApplicationArchive;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.IsDevelopment;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsProduction;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Consume;
@@ -79,20 +81,26 @@ import io.quarkus.grpc.protoc.plugin.MutinyGrpcGenerator;
 import io.quarkus.grpc.runtime.GrpcContainer;
 import io.quarkus.grpc.runtime.GrpcServerRecorder;
 import io.quarkus.grpc.runtime.ServerInterceptorStorage;
-import io.quarkus.grpc.runtime.config.GrpcConfiguration;
 import io.quarkus.grpc.runtime.config.GrpcServerBuildTimeConfig;
 import io.quarkus.grpc.runtime.health.GrpcHealthEndpoint;
 import io.quarkus.grpc.runtime.health.GrpcHealthStorage;
 import io.quarkus.grpc.runtime.supports.context.GrpcDuplicatedContextGrpcInterceptor;
 import io.quarkus.grpc.runtime.supports.context.GrpcRequestContextGrpcInterceptor;
+import io.quarkus.grpc.runtime.supports.context.RoutingContextGrpcInterceptor;
 import io.quarkus.grpc.runtime.supports.exc.DefaultExceptionHandlerProvider;
 import io.quarkus.grpc.runtime.supports.exc.ExceptionInterceptor;
 import io.quarkus.kubernetes.spi.KubernetesPortBuildItem;
 import io.quarkus.netty.deployment.MinNettyAllocatorMaxOrderBuildItem;
 import io.quarkus.runtime.LaunchMode;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 import io.quarkus.vertx.deployment.VertxBuildItem;
+import io.quarkus.vertx.http.deployment.FilterBuildItem;
 import io.quarkus.vertx.http.deployment.VertxWebRouterBuildItem;
+import io.quarkus.vertx.http.runtime.security.SecurityHandlerPriorities;
+import io.vertx.core.Handler;
+import io.vertx.ext.web.Router;
+import io.vertx.ext.web.RoutingContext;
 
 public class GrpcServerProcessor {
 
@@ -484,9 +492,16 @@ public class GrpcServerProcessor {
                     }
 
                     @Override
+                    public int priority() {
+                        // Must run after the SpringDIProcessor annotation transformer, which has default priority 1000
+                        return 500;
+                    }
+
+                    @Override
                     public void transform(TransformationContext context) {
                         ClassInfo clazz = context.getTarget().asClass();
-                        if (userDefinedServices.contains(clazz.name()) && !customScopes.isScopeDeclaredOn(clazz)) {
+                        if (userDefinedServices.contains(clazz.name())
+                                && !customScopes.isScopeIn(context.getAnnotations())) {
                             // Add @Singleton to make it a bean
                             context.transform()
                                     .add(BuiltinScope.SINGLETON.getName())
@@ -531,7 +546,7 @@ public class GrpcServerProcessor {
         }
     }
 
-    @BuildStep(onlyIf = IsNormal.class)
+    @BuildStep(onlyIf = IsProduction.class)
     KubernetesPortBuildItem registerGrpcServiceInKubernetes(List<BindableServiceBuildItem> bindables) {
         if (!bindables.isEmpty()) {
             boolean useSeparateServer = ConfigProvider.getConfig().getOptionalValue("quarkus.grpc.server.use-separate-server",
@@ -559,6 +574,7 @@ public class GrpcServerProcessor {
             // Global interceptors are invoked before any of the per-service interceptors
             beans.produce(AdditionalBeanBuildItem.unremovableOf(GrpcRequestContextGrpcInterceptor.class));
             beans.produce(AdditionalBeanBuildItem.unremovableOf(GrpcDuplicatedContextGrpcInterceptor.class));
+            beans.produce(AdditionalBeanBuildItem.unremovableOf(RoutingContextGrpcInterceptor.class));
             features.produce(new FeatureBuildItem(GRPC_SERVER));
 
             if (capabilities.isPresent(Capability.SECURITY)) {
@@ -613,9 +629,12 @@ public class GrpcServerProcessor {
         // the rest, if anything stays, should be logged as problematic
         Set<String> superfluousInterceptors = new HashSet<>(interceptors.nonGlobalInterceptors);
 
+        // Remove our internal non-global interceptors
+        superfluousInterceptors.remove(RoutingContextGrpcInterceptor.class.getName());
+
         // Remove the metrics interceptors
-        for (String MICROMETER_INTERCEPTOR : MICROMETER_INTERCEPTORS) {
-            superfluousInterceptors.remove(MICROMETER_INTERCEPTOR);
+        for (String mi : MICROMETER_INTERCEPTORS) {
+            superfluousInterceptors.remove(mi);
         }
 
         List<AnnotationInstance> found = new ArrayList<>(index.getAnnotations(GrpcDotNames.REGISTER_INTERCEPTOR));
@@ -676,14 +695,16 @@ public class GrpcServerProcessor {
     @Record(value = ExecutionTime.RUNTIME_INIT)
     @Consume(SyntheticBeansRuntimeInitBuildItem.class)
     ServiceStartBuildItem initializeServer(GrpcServerRecorder recorder,
-            GrpcConfiguration config,
             GrpcBuildTimeConfig buildTimeConfig,
             ShutdownContextBuildItem shutdown,
             List<BindableServiceBuildItem> bindables,
             List<RecorderBeanInitializedBuildItem> orderEnforcer,
             LaunchModeBuildItem launchModeBuildItem,
             VertxWebRouterBuildItem routerBuildItem,
-            VertxBuildItem vertx, Capabilities capabilities) {
+            VertxBuildItem vertx, Capabilities capabilities,
+            List<FilterBuildItem> filterBuildItems,
+            ValidationPhaseBuildItem validationPhase,
+            BeanContainerBuildItem beanContainerBuildItem) {
 
         // Build the list of blocking methods per service implementation
         Map<String, List<String>> blocking = new HashMap<>();
@@ -700,12 +721,37 @@ public class GrpcServerProcessor {
         }
 
         if (!bindables.isEmpty()
-                || (LaunchMode.current() == LaunchMode.DEVELOPMENT && buildTimeConfig.devMode.forceServerStart)) {
+                || (LaunchMode.current() == LaunchMode.DEVELOPMENT && buildTimeConfig.devMode().forceServerStart())) {
             //Uses mainrouter when the 'quarkus.http.root-path' is not '/'
-            recorder.initializeGrpcServer(vertx.getVertx(),
-                    routerBuildItem.getMainRouter() != null ? routerBuildItem.getMainRouter() : routerBuildItem.getHttpRouter(),
-                    config, shutdown, blocking, virtuals, launchModeBuildItem.getLaunchMode(),
-                    capabilities.isPresent(Capability.SECURITY));
+            Map<Integer, Handler<RoutingContext>> securityHandlers = null;
+            final RuntimeValue<Router> routerRuntimeValue;
+            if (routerBuildItem.getMainRouter() != null) {
+                routerRuntimeValue = routerBuildItem.getMainRouter();
+                if (capabilities.isPresent(Capability.SECURITY)) {
+                    securityHandlers = filterBuildItems
+                            .stream()
+                            .filter(filter -> filter.getPriority() == SecurityHandlerPriorities.AUTHENTICATION
+                                    || filter.getPriority() == SecurityHandlerPriorities.AUTHORIZATION)
+                            .collect(Collectors.toMap(f -> f.getPriority() * -1, FilterBuildItem::getHandler));
+                    // for the moment being, the main router doesn't have QuarkusErrorHandler, but we need to make
+                    // sure that exceptions raised during proactive authentication or HTTP authorization are handled
+                    recorder.addMainRouterErrorHandlerIfSameServer(routerRuntimeValue);
+                }
+            } else {
+                routerRuntimeValue = routerBuildItem.getHttpRouter();
+            }
+            Type bindableServiceType = Type.create(GrpcDotNames.BINDABLE_SERVICE, org.jboss.jandex.Type.Kind.CLASS);
+            BeanStream bindableServiceBeanStream = validationPhase.getContext().beans().classBeans()
+                    .matchBeanTypes(new Predicate<>() {
+                        @Override
+                        public boolean test(Set<Type> types) {
+                            return types.contains(bindableServiceType);
+                        }
+                    });
+            recorder.initializeGrpcServer(bindableServiceBeanStream.isEmpty(), beanContainerBuildItem.getValue(),
+                    vertx.getVertx(), routerRuntimeValue,
+                    shutdown, blocking, virtuals, launchModeBuildItem.getLaunchMode(),
+                    capabilities.isPresent(Capability.SECURITY), securityHandlers);
             return new ServiceStartBuildItem(GRPC_SERVER);
         }
         return null;
@@ -726,14 +772,14 @@ public class GrpcServerProcessor {
             BuildProducer<AdditionalBeanBuildItem> beans) {
         boolean healthEnabled = false;
         if (!bindables.isEmpty()) {
-            healthEnabled = config.mpHealthEnabled;
+            healthEnabled = config.mpHealthEnabled();
 
-            if (config.grpcHealthEnabled) {
+            if (config.grpcHealthEnabled()) {
                 beans.produce(AdditionalBeanBuildItem.unremovableOf(GrpcHealthEndpoint.class));
                 healthEnabled = true;
             }
             healthBuildItems.produce(new HealthBuildItem("io.quarkus.grpc.runtime.health.GrpcHealthCheck",
-                    config.mpHealthEnabled));
+                    config.mpHealthEnabled()));
         }
         if (healthEnabled || LaunchMode.current() == LaunchMode.DEVELOPMENT) {
             beans.produce(AdditionalBeanBuildItem.unremovableOf(GrpcHealthStorage.class));

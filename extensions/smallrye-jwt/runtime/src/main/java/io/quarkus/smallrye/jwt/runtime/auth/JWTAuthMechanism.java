@@ -9,6 +9,8 @@ import java.util.Set;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import org.jboss.logging.Logger;
+
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
@@ -34,11 +36,12 @@ import io.vertx.ext.web.RoutingContext;
  */
 @ApplicationScoped
 public class JWTAuthMechanism implements HttpAuthenticationMechanism {
+    private static final Logger LOG = Logger.getLogger(JWTAuthMechanism.class);
     private static final String ERROR_MSG = "SmallRye JWT requires a safe (isolated) Vert.x sub-context for propagation "
             + "of the '" + TokenCredential.class.getName() + "', but the current context hasn't been flagged as such.";
     protected static final String COOKIE_HEADER = "Cookie";
     protected static final String AUTHORIZATION_HEADER = "Authorization";
-    protected static final String BEARER = "Bearer";
+    public static final String BEARER = "Bearer";
 
     /**
      * Propagate {@link TokenCredential} via Vert.X duplicated context if explicitly enabled and request context
@@ -46,11 +49,11 @@ public class JWTAuthMechanism implements HttpAuthenticationMechanism {
      */
     private final boolean propagateTokenCredentialWithDuplicatedCtx;
     @Inject
-    private JWTAuthContextInfo authContextInfo;
+    JWTAuthContextInfo authContextInfo;
     private final boolean silent;
 
     public JWTAuthMechanism(SmallRyeJwtConfig config) {
-        this.silent = config == null ? false : config.silent;
+        this.silent = config == null ? false : config.silent();
         // we use system property in order to keep this option internal and avoid introducing SPI
         this.propagateTokenCredentialWithDuplicatedCtx = Boolean
                 .getBoolean("io.quarkus.smallrye.jwt.runtime.auth.JWTAuthMechanism." +
@@ -86,6 +89,8 @@ public class JWTAuthMechanism implements HttpAuthenticationMechanism {
             return identityProviderManager
                     .authenticate(HttpSecurityUtils.setRoutingContextAttribute(
                             new TokenAuthenticationRequest(new JsonWebTokenCredential(jwtToken)), context));
+        } else {
+            LOG.debug("Bearer access token is not available");
         }
         return Uni.createFrom().optional(Optional.empty());
     }

@@ -46,10 +46,10 @@ In the steps that follow, you will continue to configure and update the Auth0 ap
 
 == Create a Quarkus application
 
-Use the following Maven command to create a Quarkus RESTEasy Reactive application that can be secured with the Quarkus OIDC extension.
+Use the following Maven command to create a Quarkus REST (formerly RESTEasy Reactive) application that can be secured with the Quarkus OIDC extension.
 
 :create-app-artifact-id: quarkus-auth0
-:create-app-extensions: resteasy-reactive,oidc
+:create-app-extensions: rest,oidc
 include::{includes}/devtools/create-app.adoc[]
 
 Create the application workspace and import it into your favorite IDE.
@@ -622,10 +622,10 @@ Now that we have managed to use OIDC authorization code flow and used both ID to
 
 In fact, the last code example, showing the injected `UserInfo`, is a concrete example of the access token propagation, in this case, Quarkus propagates the Auth0 access token to the Auth0 `UserInfo` endpoint to acquire `UserInfo`. Quarkus does it without users having to do anything themselves.
 
-But what about propagating access tokens to some custom services ? It is very easy to achieve in Quarkus, both for the authorization code and bearer token flows. All you need to do is to create a Reactive REST Client interface for calling the service requiring a Bearer token access and annotate it with `@AccessToken` and the access token arriving to the front-end endpoint as the Auth0 Bearer access token or acquired by Quarkus after completing the Auth0 authorization code flow, will be propagated to the target microservice. This is as easy as it can get.
+But what about propagating access tokens to some custom services ? It is very easy to achieve in Quarkus, both for the authorization code and bearer token flows. All you need to do is to create a REST Client interface for calling the service requiring a Bearer token access and annotate it with `@AccessToken` and the access token arriving to the front-end endpoint as the Auth0 Bearer access token or acquired by Quarkus after completing the Auth0 authorization code flow, will be propagated to the target microservice. This is as easy as it can get.
 
 For examples of propagating access tokens, see the following sections in this tutorial.
-For more information about token propagation, see xref:security-openid-connect-client-reference.adoc#reactive-token-propagation[OIDC token propagation].
+For more information about token propagation, see xref:security-openid-connect-client-reference.adoc#token-propagation-rest[OIDC token propagation].
 
 [[jwt-access-tokens]]
 === Access tokens in JWT format
@@ -647,11 +647,11 @@ Add the following dependencies to the project to support OIDC token propagation 
 ----
 <dependency>
     <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-rest-client-reactive-jackson</artifactId>
+    <artifactId>quarkus-rest-client-jackson</artifactId>
 </dependency>
 <dependency>
    <groupId>io.quarkus</groupId>
-   <artifactId>quarkus-oidc-token-propagation-reactive</artifactId>
+   <artifactId>quarkus-rest-client-oidc-token-propagation</artifactId>
 </dependency>
 ----
 
@@ -689,7 +689,7 @@ quarkus.oidc.auth-server-url=https://dev-3ve0cgn7.us.auth0.com
 
 which is all what is needed for the OIDC `service` application to fetch Auth0 public verification keys and use them to verify Auth0 access tokens in JWT format.
 
-[[NOTE]]
+[NOTE]
 ====
 In this tutorial you have already configured the OIDC `hybrid` application which can handle both authorization code and bearer token authentication flows. In production you will run microservices as separate servers but for the sake of simplicity `ApiEchoService` will not have to be started as a second server with its own configuration containing `quarkus.oidc.auth-server-url=https://dev-3ve0cgn7.us.auth0.com` only, and therefore the current configuration which already has the Auth0 dev tenant address configured will be reused.
 
@@ -708,7 +708,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
-import io.quarkus.oidc.token.propagation.AccessToken;
+import io.quarkus.oidc.token.propagation.common.AccessToken;
 
 @RegisterRestClient
 @AccessToken <1>
@@ -928,7 +928,7 @@ Press `r` and notice this test failing with `403` which is expected because the 
 
 image::auth0-test-failure-403.png[Auth0 test failure 403]
 
-Before fixing the test, let's review the options available for testing Quarkus endpoints secured by OIDC. These options might vary, depending on which flow your application supports and how you prefer to test. Endpoints which use OIDC authorization code flow can be tested using xref:security-oidc-code-flow-authentication#integration-testing[one of these options] and endpoints which use Bearer token authentication can be tested using xref:security-oidc-bearer-token-authentication#integration-testing[one of these options].
+Before fixing the test, let's review the options available for testing Quarkus endpoints secured by OIDC. These options might vary, depending on which flow your application supports and how you prefer to test. Endpoints which use OIDC authorization code flow can be tested using xref:security-oidc-code-flow-authentication.adoc#code-flow-integration-testing[one of these options] and endpoints which use Bearer token authentication can be tested using xref:security-oidc-bearer-token-authentication.adoc#bearer-token-integration-testing[one of these options].
 
 As you can see, testing of the endpoints secured with Auth0 can be done with the help of `Wiremock`, or `@TestSecurity` annotation. Experiment with writing such tests on your own and reach out if you encounter any problems.
 
@@ -956,7 +956,7 @@ image::auth0-password-grant.png[Auth0 password grant]
 It is important to clarify that we do not recommend using the deprecated OAuth2 `password` token grant in production. However using it can help testing the endpoint with tokens acquired from the live dev Auth0 tenant.
 ====
 
-`OidcTestClient` should be used to test applications accepting bearer tokens which will work for the endpoint developed in this tutorial as it supports both authorization code flow and bearer token authentication. You would need to use OIDC WireMock or `HtmlUnit` directly against the Auth0 dev tenant if only the authorization code flow was supported - in the latter case `HtmlUnit` test code would have to be aligned with how Auth0 challenges users to enter their credentials. If you like, you can copy the xref:security-oidc-code-flow-authentication#integration-testing-wiremock[HtmlUnit test fragment] from the documentation and experiment with it.
+`OidcTestClient` should be used to test applications accepting bearer tokens which will work for the endpoint developed in this tutorial as it supports both authorization code flow and bearer token authentication. You would need to use OIDC WireMock or `HtmlUnit` directly against the Auth0 dev tenant if only the authorization code flow was supported - in the latter case `HtmlUnit` test code would have to be aligned with how Auth0 challenges users to enter their credentials. If you like, you can copy the xref:security-oidc-code-flow-authentication.adoc#code-flow-integration-testing-wiremock[HtmlUnit test fragment] from the documentation and experiment with it.
 
 In meantime we will now proceed with fixing the currently failing test using `OidcTestClient`.
 

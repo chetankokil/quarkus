@@ -27,9 +27,9 @@ import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
-import io.quarkus.narayana.lra.runtime.LRAConfiguration;
 import io.quarkus.narayana.lra.runtime.NarayanaLRAProducers;
 import io.quarkus.narayana.lra.runtime.NarayanaLRARecorder;
+import io.quarkus.smallrye.openapi.deployment.spi.AddToOpenAPIDefinitionBuildItem;
 
 class NarayanaLRAProcessor {
 
@@ -42,12 +42,12 @@ class NarayanaLRAProcessor {
 
         if (!isResteasyClassicAvailable && !isResteasyReactiveAvailable) {
             throw new IllegalStateException(
-                    "'quarkus-narayana-lra' can only work if 'quarkus-resteasy-jackson' or 'quarkus-resteasy-reactive-jackson' is present");
+                    "'quarkus-narayana-lra' can only work if 'quarkus-rest-jackson' or 'quarkus-resteasy-jackson' is present");
         }
 
         if (!capabilities.isCapabilityWithPrefixPresent(Capability.REST_CLIENT)) {
             throw new IllegalStateException(
-                    "'quarkus-narayana-lra' can only work if 'quarkus-resteasy-client' or 'quarkus-rest-client-reactive' is present");
+                    "'quarkus-narayana-lra' can only work if 'quarkus-rest-client' or 'quarkus-resteasy-client' is present");
         }
 
         feature.produce(new FeatureBuildItem(Feature.NARAYANA_LRA));
@@ -55,10 +55,8 @@ class NarayanaLRAProcessor {
 
     @BuildStep
     @Record(RUNTIME_INIT)
-    public void build(NarayanaLRARecorder recorder,
-            LRAConfiguration configuration) {
-
-        recorder.setConfig(configuration);
+    public void build(NarayanaLRARecorder recorder) {
+        recorder.setConfig();
     }
 
     @BuildStep()
@@ -152,5 +150,15 @@ class NarayanaLRAProcessor {
                 .addBeanClass(ParticipantProxyResource.class)
                 .build());
         additionalBeans.produce(new AdditionalBeanBuildItem(NarayanaLRAProducers.class));
+    }
+
+    @BuildStep
+    public void filterOpenAPIEndpoint(BuildProducer<AddToOpenAPIDefinitionBuildItem> openAPIProducer,
+            Capabilities capabilities, LRABuildTimeConfiguration lraBuildTimeConfig) {
+
+        if (capabilities.isPresent(Capability.SMALLRYE_OPENAPI)) {
+            NarayanaLRAOpenAPIFilter lraOpenAPIFilter = new NarayanaLRAOpenAPIFilter(lraBuildTimeConfig.openapiIncluded());
+            openAPIProducer.produce(new AddToOpenAPIDefinitionBuildItem(lraOpenAPIFilter));
+        }
     }
 }

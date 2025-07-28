@@ -10,7 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.jar.Manifest;
 
 /**
  * While {@link ArchivePathTree} implementation is thread-safe, this implementation
@@ -54,15 +53,18 @@ class SharedArchivePathTree extends ArchivePathTree {
     @Override
     public OpenPathTree open() {
         var lastOpen = this.lastOpen;
-        if (lastOpen != null && lastOpen.acquire()) {
-            return new CallerOpenPathTree(lastOpen);
+        if (lastOpen != null) {
+            var acquired = lastOpen.acquire();
+            if (acquired != null) {
+                return acquired;
+            }
         }
         try {
-            this.lastOpen = new SharedOpenArchivePathTree(openFs());
+            lastOpen = this.lastOpen = new SharedOpenArchivePathTree(openFs());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return new CallerOpenPathTree(this.lastOpen);
+        return new CallerOpenPathTree(lastOpen);
     }
 
     private class SharedOpenArchivePathTree extends OpenArchivePathTree {
@@ -74,14 +76,33 @@ class SharedArchivePathTree extends ArchivePathTree {
             openCount.incrementAndGet();
         }
 
-        private boolean acquire() {
+        /**
+         * Returns a new handle for this open archive tree to the caller
+         * as long as this open archive tree is still open and is still
+         * the last one that was open for this archive. Otherwise, the method
+         * will return null.
+         *
+         * @return a new instance of {@link CallerOpenPathTree} or null,
+         *         if the current open archive tree has been closed or another open
+         *         archive tree has been created for this archive
+         */
+        private CallerOpenPathTree acquire() {
             readLock().lock();
-            final boolean result = lastOpen == this && isOpen();
-            if (result) {
-                users.incrementAndGet();
+            try {
+                final boolean result = lastOpen == this && isOpen();
+                if (result) {
+                    users.incrementAndGet();
+                    return new CallerOpenPathTree(this);
+                }
+            } finally {
+                readLock().unlock();
             }
-            readLock().unlock();
-            return result;
+            return null;
+        }
+
+        @Override
+        public OpenPathTree open() {
+            return SharedArchivePathTree.this.open();
         }
 
         @Override
@@ -102,6 +123,11 @@ class SharedArchivePathTree extends ArchivePathTree {
                 writeLock().unlock();
             }
         }
+
+        @Override
+        public String toString() {
+            return SharedArchivePathTree.this.toString();
+        }
     }
 
     /**
@@ -116,6 +142,11 @@ class SharedArchivePathTree extends ArchivePathTree {
 
         private CallerOpenPathTree(SharedOpenArchivePathTree delegate) {
             this.delegate = delegate;
+        }
+
+        @Override
+        public boolean isArchiveOrigin() {
+            return delegate.isArchiveOrigin();
         }
 
         @Override
@@ -139,13 +170,18 @@ class SharedArchivePathTree extends ArchivePathTree {
         }
 
         @Override
-        public Manifest getManifest() {
-            return delegate.getManifest();
+        public ManifestAttributes getManifestAttributes() {
+            return delegate.getManifestAttributes();
         }
 
         @Override
         public void walk(PathVisitor visitor) {
             delegate.walk(visitor);
+        }
+
+        @Override
+        public void walkIfContains(String relativePath, PathVisitor visitor) {
+            delegate.walkIfContains(relativePath, visitor);
         }
 
         @Override
@@ -156,6 +192,11 @@ class SharedArchivePathTree extends ArchivePathTree {
         @Override
         public void accept(String relativePath, Consumer<PathVisit> consumer) {
             delegate.accept(relativePath, consumer);
+        }
+
+        @Override
+        public void acceptAll(String relativePath, Consumer<PathVisit> consumer) {
+            delegate.acceptAll(relativePath, consumer);
         }
 
         @Override
@@ -182,6 +223,11 @@ class SharedArchivePathTree extends ArchivePathTree {
             } finally {
                 delegate.writeLock().unlock();
             }
+        }
+
+        @Override
+        public String toString() {
+            return delegate.toString();
         }
     }
 }

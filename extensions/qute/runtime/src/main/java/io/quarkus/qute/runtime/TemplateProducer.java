@@ -4,6 +4,7 @@ import java.lang.annotation.Annotation;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -33,9 +34,11 @@ import io.quarkus.qute.Location;
 import io.quarkus.qute.ParameterDeclaration;
 import io.quarkus.qute.RenderedResults;
 import io.quarkus.qute.ResultsCollectingTemplateInstance;
+import io.quarkus.qute.SectionNode;
 import io.quarkus.qute.Template;
 import io.quarkus.qute.TemplateInstance;
 import io.quarkus.qute.TemplateInstanceBase;
+import io.quarkus.qute.TemplateNode;
 import io.quarkus.qute.Variant;
 import io.quarkus.qute.runtime.QuteRecorder.QuteContext;
 import io.quarkus.runtime.LaunchMode;
@@ -66,7 +69,7 @@ public class TemplateProducer {
             templateVariants.put(entry.getKey(), var);
         }
         this.templateVariants = Collections.unmodifiableMap(templateVariants);
-        this.renderedResults = launchMode == LaunchMode.TEST ? renderedResults.get() : null;
+        this.renderedResults = launchMode == LaunchMode.TEST && renderedResults.isResolvable() ? renderedResults.get() : null;
         this.injectedTemplates = launchMode == LaunchMode.DEVELOPMENT ? Collections.synchronizedList(new ArrayList<>()) : null;
         LOGGER.debugf("Initializing Qute variant templates: %s", templateVariants);
     }
@@ -171,6 +174,14 @@ public class TemplateProducer {
         }
 
         @Override
+        public SectionNode getRootNode() {
+            if (unambiguousTemplate != null) {
+                return unambiguousTemplate.get().getRootNode();
+            }
+            throw ambiguousTemplates("getRootNode()");
+        }
+
+        @Override
         public TemplateInstance instance() {
             TemplateInstance instance = new InjectableTemplateInstanceImpl();
             return renderedResults != null ? new ResultsCollectingTemplateInstance(instance, renderedResults) : instance;
@@ -237,6 +248,22 @@ public class TemplateProducer {
             throw ambiguousTemplates("getFragmentIds()");
         }
 
+        @Override
+        public List<TemplateNode> getNodes() {
+            if (unambiguousTemplate != null) {
+                return unambiguousTemplate.get().getNodes();
+            }
+            throw ambiguousTemplates("getNodes()");
+        }
+
+        @Override
+        public Collection<TemplateNode> findNodes(Predicate<TemplateNode> predicate) {
+            if (unambiguousTemplate != null) {
+                return unambiguousTemplate.get().findNodes(predicate);
+            }
+            throw ambiguousTemplates("findNodes()");
+        }
+
         private UnsupportedOperationException ambiguousTemplates(String method) {
             return new UnsupportedOperationException("Ambiguous injected templates do not support " + method);
         }
@@ -300,6 +327,21 @@ public class TemplateProducer {
             }
 
             @Override
+            public List<TemplateNode> getNodes() {
+                return InjectableTemplate.this.getNodes();
+            }
+
+            @Override
+            public SectionNode getRootNode() {
+                return InjectableTemplate.this.getRootNode();
+            }
+
+            @Override
+            public Collection<TemplateNode> findNodes(Predicate<TemplateNode> predicate) {
+                return InjectableTemplate.this.findNodes(predicate);
+            }
+
+            @Override
             public TemplateInstance instance() {
                 TemplateInstance instance = new InjectableFragmentTemplateInstanceImpl(identifier);
                 return renderedResults != null ? new ResultsCollectingTemplateInstance(instance, renderedResults) : instance;
@@ -353,7 +395,8 @@ public class TemplateProducer {
             private TemplateInstance templateInstance() {
                 TemplateInstance instance = template().instance();
                 if (dataMap != null) {
-                    dataMap.forEach(instance::data);
+                    dataMap.forEachData(instance::data);
+                    dataMap.forEachComputedData(instance::computedData);
                 } else if (data != null) {
                     instance.data(data);
                 }

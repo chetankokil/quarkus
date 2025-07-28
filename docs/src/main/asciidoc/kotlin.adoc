@@ -25,13 +25,13 @@ NB: For Gradle project setup please see below, and for further reference consult
 First, we need a new Kotlin project. This can be done using the following command:
 
 :create-app-artifact-id: rest-kotlin-quickstart
-:create-app-extensions: kotlin,resteasy-reactive-jackson
+:create-app-extensions: kotlin,rest-jackson
 :create-app-code:
 include::{includes}/devtools/create-app.adoc[]
 
 When adding `kotlin` to the extensions list, the Maven plugin will generate a project that is properly
 configured to work with Kotlin. Furthermore, the `org.acme.ReactiveGreetingResource` class is implemented as Kotlin source code (as is the case with the generated tests).
-The addition of `resteasy-reactive-jackson` in the extension list results in importing the RESTEasy Reactive and Jackson extensions.
+The addition of `rest-jackson` in the extension list results in importing the Quarkus REST (formerly RESTEasy Reactive) and Jackson extensions.
 
 `ReactiveGreetingResource` looks like this:
 
@@ -50,7 +50,7 @@ class ReactiveGreetingResource {
 
     @GET
     @Produces(MediaType.TEXT_PLAIN)
-    fun hello() = "Hello from RESTEasy Reactive"
+    fun hello() = "Hello from Quarkus REST"
 }
 ----
 
@@ -209,8 +209,8 @@ dependencies {
 
    implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
 
-    implementation 'io.quarkus:quarkus-resteasy-reactive'
-    implementation 'io.quarkus:quarkus-resteasy-reactive-jackson'
+    implementation 'io.quarkus:quarkus-rest'
+    implementation 'io.quarkus:quarkus-rest-jackson'
     implementation 'io.quarkus:quarkus-kotlin'
 
     testImplementation 'io.quarkus:quarkus-junit5'
@@ -221,8 +221,8 @@ group = '...' // set your group
 version = '1.0.0-SNAPSHOT'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 allOpen { // <2>
@@ -233,12 +233,12 @@ allOpen { // <2>
 }
 
 compileKotlin {
-    kotlinOptions.jvmTarget = JavaVersion.VERSION_11
+    kotlinOptions.jvmTarget = JavaVersion.VERSION_21
     kotlinOptions.javaParameters = true
 }
 
 compileTestKotlin {
-    kotlinOptions.jvmTarget = JavaVersion.VERSION_11
+    kotlinOptions.jvmTarget = JavaVersion.VERSION_21
 }
 ----
 
@@ -279,8 +279,8 @@ dependencies {
     implementation(enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}"))
 
     implementation("io.quarkus:quarkus-kotlin")
-    implementation("io.quarkus:quarkus-resteasy-reactive")
-    implementation("io.quarkus:quarkus-resteasy-reactive-jackson")
+    implementation("io.quarkus:quarkus-rest")
+    implementation("io.quarkus:quarkus-rest-jackson")
 
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.rest-assured:rest-assured")
@@ -290,8 +290,8 @@ group = '...' // set your group
 version = "1.0.0-SNAPSHOT"
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 allOpen { // <2>
@@ -301,9 +301,11 @@ allOpen { // <2>
     annotation("io.quarkus.test.junit.QuarkusTest")
 }
 
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-    kotlinOptions.jvmTarget = JavaVersion.VERSION_11.toString()
-    kotlinOptions.javaParameters = true
+kotlin {
+	compilerOptions {
+		jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
+		javaParameters = true
+	}
 }
 
 ----
@@ -417,7 +419,7 @@ include::{includes}/devtools/build-native.adoc[]
 [[kotlin-jackson]]
 == Kotlin and Jackson
 
-If the `com.fasterxml.jackson.module:jackson-module-kotlin` dependency and the `quarkus-jackson` extension (or one of the `quarkus-resteasy-jackson` or `quarkus-resteasy-reactive-jackson` extensions) have been added to the project,
+If the `com.fasterxml.jackson.module:jackson-module-kotlin` dependency and the `quarkus-jackson` extension (or one of the `quarkus-resteasy-jackson` or `quarkus-rest-jackson` extensions) have been added to the project,
 then Quarkus automatically registers the `KotlinModule` to the `ObjectMapper` bean (see xref:rest-json.adoc#jackson[this] guide for more details).
 
 When using Kotlin data classes with `native-image` you may experience serialization errors that do not occur with the `JVM` version, despite the Kotlin Jackson Module being registered. This is especially so if you have a more complex JSON hierarchy, where an issue on a lower node causes a serialization failure. The error message displayed is a catch-all and typically displays an issue with the root object, which may not necessarily be the case.
@@ -460,6 +462,11 @@ data class ResultItem(
 ...
 ----
 
+[NOTE]
+====
+When using Kotlin with Quarkus REST, it is worth considering the use of `quarkus-rest-kotlin-serialization` which leverages the Kotlin Serialization framework instead of Jackson.
+====
+
 == Kotlin and the Kubernetes Client
 
 When working with the `quarkus-kubernetes` extension and have Kotlin classes bound to CustomResource definitions (like you do for building operators), you need to be aware that the underlying Fabric8 Kubernetes Client uses its own static Jackson `ObjectMapper` s, which can be configured as follows with the `KotlinModule`:
@@ -486,13 +493,13 @@ The following extensions provide support for Kotlin Coroutines by allowing the u
 |===
 |Extension |Comments
 
-|`quarkus-resteasy-reactive`
+|`quarkus-rest`
 |Support is provided for Jakarta REST Resource Methods
 
-|`quarkus-rest-client-reactive`
+|`quarkus-rest-client`
 |Support is provided for REST Client interface methods
 
-|`quarkus-smallrye-reactive-messaging`
+|`quarkus-messaging`
 |Support is provided for Reactive messaging methods
 
 |`quarkus-scheduler`
@@ -500,6 +507,12 @@ The following extensions provide support for Kotlin Coroutines by allowing the u
 
 |`quarkus-smallrye-fault-tolerance`
 |Support is provided for the declarative annotation-based API
+
+|`quarkus-vertx`
+|Support is provided for `@ConsumeEvent` methods
+
+|`quarkus-websockets-next`
+|Support is provided for server-side and client-side endpoint methods
 
 |===
 

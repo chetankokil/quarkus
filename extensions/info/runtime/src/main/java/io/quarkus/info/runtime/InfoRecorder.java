@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
+import org.jboss.logging.Logger;
+
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InstanceHandle;
 import io.quarkus.info.BuildInfo;
@@ -15,6 +17,7 @@ import io.quarkus.info.GitInfo;
 import io.quarkus.info.JavaInfo;
 import io.quarkus.info.OsInfo;
 import io.quarkus.info.runtime.spi.InfoContributor;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.annotations.Recorder;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpHeaders;
@@ -26,8 +29,35 @@ import io.vertx.ext.web.RoutingContext;
 @Recorder
 public class InfoRecorder {
 
-    public Handler<RoutingContext> handler(Map<String, Object> buildTimeInfo, List<InfoContributor> knownContributors) {
-        return new InfoHandler(buildTimeInfo, knownContributors);
+    private static final Logger log = Logger.getLogger(InfoRecorder.class);
+
+    public RuntimeValue<Map<String, Object>> getFinalBuildInfo(Map<String, Object> buildTimeInfo,
+            List<InfoContributor> knownContributors) {
+        Map<String, Object> finalBuildInfo = new HashMap<>(buildTimeInfo);
+        for (InfoContributor contributor : knownContributors) {
+            String key = contributor.name();
+            if (finalBuildInfo.containsKey(key)) {
+                log.warn(
+                        "Info key " + key + " contains duplicate values. This can lead to unpredictable values being used");
+            }
+            //TODO: we might want this to be done lazily
+            // also, do we want to merge information or simply replace like we are doing here?
+            finalBuildInfo.put(key, contributor.data());
+        }
+        for (InstanceHandle<InfoContributor> handler : Arc.container().listAll(InfoContributor.class)) {
+            InfoContributor contributor = handler.get();
+            String key = contributor.name();
+            if (finalBuildInfo.containsKey(key)) {
+                log.warn(
+                        "Info key " + key + " contains duplicate values. This can lead to unpredictable values being used");
+            }
+            finalBuildInfo.put(key, contributor.data());
+        }
+        return new RuntimeValue(finalBuildInfo);
+    }
+
+    public Handler<RoutingContext> handler(RuntimeValue<Map<String, Object>> finalBuildInfo) {
+        return new InfoHandler(finalBuildInfo.getValue());
     }
 
     public Supplier<GitInfo> gitInfoSupplier(String branch, String latestCommitId, String latestCommitTime) {
@@ -130,6 +160,16 @@ public class InfoRecorder {
                     public String version() {
                         return JavaInfoContributor.getVersion();
                     }
+
+                    @Override
+                    public String vendor() {
+                        return JavaInfoContributor.getVendor();
+                    }
+
+                    @Override
+                    public String vendorVersion() {
+                        return JavaInfoContributor.getVendorVersion();
+                    }
                 };
             }
         };
@@ -138,17 +178,8 @@ public class InfoRecorder {
     private static class InfoHandler implements Handler<RoutingContext> {
         private final Map<String, Object> finalBuildInfo;
 
-        public InfoHandler(Map<String, Object> buildTimeInfo, List<InfoContributor> knownContributors) {
-            this.finalBuildInfo = new HashMap<>(buildTimeInfo);
-            for (InfoContributor contributor : knownContributors) {
-                //TODO: we might want this to be done lazily
-                // also, do we want to merge information or simply replace like we are doing here?
-                finalBuildInfo.put(contributor.name(), contributor.data());
-            }
-            for (InstanceHandle<InfoContributor> handler : Arc.container().listAll(InfoContributor.class)) {
-                InfoContributor contributor = handler.get();
-                finalBuildInfo.put(contributor.name(), contributor.data());
-            }
+        public InfoHandler(Map<String, Object> finalBuildInfo) {
+            this.finalBuildInfo = finalBuildInfo;
         }
 
         @Override

@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -157,6 +158,7 @@ public class DevModeClient {
     public String getHttpResponse(String path, boolean allowError, Supplier<String> brokenReason, long timeout,
             TimeUnit tu) {
         AtomicReference<String> resp = new AtomicReference<>();
+
         await()
                 .pollDelay(1, TimeUnit.SECONDS)
                 .atMost(timeout, tu).until(() -> {
@@ -166,12 +168,15 @@ public class DevModeClient {
                         return true;
                     }
                     try {
-                        URL url = new URL("http://localhost:" + port + ((path.startsWith("/") ? path : "/" + path)));
+                        URL url = prepareUrl(path);
+
                         String content;
                         if (!allowError) {
                             content = IOUtils.toString(url, StandardCharsets.UTF_8);
                         } else {
                             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                            conn.setDefaultUseCaches(false);
+                            conn.setUseCaches(false);
                             // the default Accept header used by HttpURLConnection is not compatible with RESTEasy negotiation as it uses q=.8
                             conn.setRequestProperty("Accept", "text/html, *; q=0.2, */*; q=0.2");
                             if (conn.getResponseCode() >= 400) {
@@ -179,14 +184,22 @@ public class DevModeClient {
                             } else {
                                 content = IOUtils.toString(conn.getInputStream(), StandardCharsets.UTF_8);
                             }
+                            conn.disconnect();
                         }
+
                         resp.set(content);
                         return true;
                     } catch (Exception e) {
-                        LOG.error(
-                                "An error occurred when DevModeClient accessed " + path
-                                        + ". It might be a normal testing behavior but logging the exception for information",
-                                e);
+                        var sb = new StringBuilder();
+                        sb.append("DevModeClient failed to accessed ").append(path)
+                                .append(". It might be a normal testing behavior but logging the messages for information: ")
+                                .append(e.getLocalizedMessage());
+                        var cause = e.getCause();
+                        while (cause != null) {
+                            sb.append(": ").append(cause.getLocalizedMessage());
+                            cause = cause.getCause();
+                        }
+                        LOG.error(sb);
                         return false;
                     }
                 });
@@ -203,8 +216,10 @@ public class DevModeClient {
                 .pollDelay(1, TimeUnit.SECONDS)
                 .atMost(timeout, tu).until(() -> {
                     try {
-                        URL url = new URL("http://localhost:" + port + ((path.startsWith("/") ? path : "/" + path)));
+                        URL url = prepareUrl(path);
                         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                        connection.setDefaultUseCaches(false);
+                        connection.setUseCaches(false);
                         // the default Accept header used by HttpURLConnection is not compatible with RESTEasy negotiation as it uses q=.2
                         connection.setRequestProperty("Accept", "text/html, *; q=0.2, */*; q=0.2");
                         if (connection.getResponseCode() == expectedStatus) {
@@ -230,8 +245,10 @@ public class DevModeClient {
                 .pollDelay(1, TimeUnit.SECONDS)
                 .atMost(5, TimeUnit.MINUTES).until(() -> {
                     try {
-                        URL url = new URL("http://localhost:" + port + ((path.startsWith("/") ? path : "/" + path)));
+                        URL url = prepareUrl(path);
                         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                        connection.setDefaultUseCaches(false);
+                        connection.setUseCaches(false);
                         // the default Accept header used by HttpURLConnection is not compatible with RESTEasy negotiation as it uses q=.2
                         connection.setRequestProperty("Accept", "text/html, *; q=0.2, */*; q=0.2");
                         code.set(connection.getResponseCode() == expectedStatus);
@@ -258,8 +275,10 @@ public class DevModeClient {
 
     public boolean isCode(String path, int code) {
         try {
-            URL url = new URL("http://localhost:" + port + ((path.startsWith("/") ? path : "/" + path)));
+            URL url = prepareUrl(path);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setDefaultUseCaches(false);
+            connection.setUseCaches(false);
             // the default Accept header used by HttpURLConnection is not compatible with
             // RESTEasy negotiation as it uses q=.2
             connection.setRequestProperty("Accept", "text/html, *; q=0.2, */*; q=0.2");
@@ -267,5 +286,17 @@ public class DevModeClient {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private URL prepareUrl(String path) throws MalformedURLException {
+        String urlString = "http://localhost:" + port + (path.startsWith("/") ? path : "/" + path);
+        if (urlString.contains("?")) {
+            urlString += "&";
+        } else {
+            urlString += "?";
+        }
+        urlString += "_test_timestamp=" + System.currentTimeMillis();
+
+        return new URL(urlString);
     }
 }

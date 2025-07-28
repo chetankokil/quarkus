@@ -13,7 +13,6 @@ import org.hibernate.bytecode.internal.bytebuddy.BytecodeProviderImpl;
 import org.hibernate.internal.util.ReflectHelper;
 import org.hibernate.internal.util.collections.ArrayHelper;
 import org.hibernate.mapping.PersistentClass;
-import org.hibernate.proxy.pojo.ProxyFactoryHelper;
 import org.hibernate.proxy.pojo.bytebuddy.ByteBuddyProxyHelper;
 import org.jboss.logging.Logger;
 
@@ -103,9 +102,13 @@ public final class ProxyDefinitions {
         final String entityName = persistentClass.getEntityName();
         final Class mappedClass = persistentClass.getMappedClass();
         if (Modifier.isFinal(mappedClass.getModifiers())) {
-            LOGGER.warn("Could not generate an enhanced proxy for entity '" + entityName + "' (class='"
-                    + mappedClass.getCanonicalName()
-                    + "') as it's final. Your application might perform better if we're allowed to extend it.");
+            // Some Envers entity classes are final, e.g. org.hibernate.envers.DefaultRevisionEntity
+            // There's nothing users can do about it, so let's not warn in those cases.
+            if (!mappedClass.getName().startsWith("org.hibernate.")) {
+                LOGGER.warn("Could not generate an enhanced proxy for entity '" + entityName + "' (class='"
+                        + mappedClass.getCanonicalName()
+                        + "') as it's final. Your application might perform better if we're allowed to extend it.");
+            }
             return null;
         }
         final java.util.Set<Class<?>> proxyInterfaces = org.hibernate.proxy.pojo.ProxyFactoryHelper

@@ -17,6 +17,11 @@ public class OidcClientRequestReactiveFilter extends AbstractOidcClientRequestRe
 
     @Override
     protected Optional<String> clientId() {
-        return config.clientName;
+        return config.clientName();
+    }
+
+    @Override
+    protected boolean refreshOnUnauthorized() {
+        return config.refreshOnUnauthorized();
     }
 }

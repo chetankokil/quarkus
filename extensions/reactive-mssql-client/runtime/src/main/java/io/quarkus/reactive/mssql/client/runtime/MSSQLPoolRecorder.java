@@ -2,6 +2,7 @@ package io.quarkus.reactive.mssql.client.runtime;
 
 import static io.quarkus.credentials.CredentialsProvider.PASSWORD_PROPERTY_NAME;
 import static io.quarkus.credentials.CredentialsProvider.USER_PROPERTY_NAME;
+import static io.quarkus.reactive.datasource.runtime.ReactiveDataSourceUtil.qualifier;
 import static io.quarkus.reactive.datasource.runtime.UnitisedTime.unitised;
 import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configureJksKeyCertOptions;
 import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configureJksTrustOptions;
@@ -12,6 +13,8 @@ import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePfxTrustOpt
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -20,14 +23,13 @@ import jakarta.enterprise.util.TypeLiteral;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.arc.ActiveResult;
 import io.quarkus.arc.SyntheticCreationalContext;
 import io.quarkus.credentials.CredentialsProvider;
 import io.quarkus.credentials.runtime.CredentialsProviderFinder;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
 import io.quarkus.datasource.runtime.DataSourceRuntimeConfig;
-import io.quarkus.datasource.runtime.DataSourceSupport;
 import io.quarkus.datasource.runtime.DataSourcesRuntimeConfig;
-import io.quarkus.reactive.datasource.ReactiveDataSource;
 import io.quarkus.reactive.datasource.runtime.ConnectOptionsSupplier;
 import io.quarkus.reactive.datasource.runtime.DataSourceReactiveRuntimeConfig;
 import io.quarkus.reactive.datasource.runtime.DataSourcesReactiveRuntimeConfig;
@@ -40,37 +42,59 @@ import io.vertx.core.Vertx;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.mssqlclient.MSSQLConnectOptions;
 import io.vertx.mssqlclient.MSSQLPool;
+import io.vertx.mssqlclient.spi.MSSQLDriver;
 import io.vertx.sqlclient.PoolOptions;
 import io.vertx.sqlclient.impl.Utils;
 
 @Recorder
 public class MSSQLPoolRecorder {
 
-    private static final TypeLiteral<Instance<MSSQLPoolCreator>> TYPE_LITERAL = new TypeLiteral<>() {
+    private static final TypeLiteral<Instance<MSSQLPoolCreator>> POOL_CREATOR_TYPE_LITERAL = new TypeLiteral<>() {
     };
 
     private static final Logger log = Logger.getLogger(MSSQLPoolRecorder.class);
 
-    public Function<SyntheticCreationalContext<MSSQLPool>, MSSQLPool> configureMSSQLPool(RuntimeValue<Vertx> vertx,
-            Supplier<Integer> eventLoopCount,
-            String dataSourceName,
-            DataSourcesRuntimeConfig dataSourcesRuntimeConfig,
-            DataSourcesReactiveRuntimeConfig dataSourcesReactiveRuntimeConfig,
-            DataSourcesReactiveMSSQLConfig dataSourcesReactiveMSSQLConfig,
-            ShutdownContext shutdown) {
+    private final RuntimeValue<DataSourcesRuntimeConfig> runtimeConfig;
+    private final RuntimeValue<DataSourcesReactiveRuntimeConfig> reactiveRuntimeConfig;
+    private final RuntimeValue<DataSourcesReactiveMSSQLConfig> reactiveMSSQLRuntimeConfig;
 
+    public MSSQLPoolRecorder(
+            final RuntimeValue<DataSourcesRuntimeConfig> runtimeConfig,
+            final RuntimeValue<DataSourcesReactiveRuntimeConfig> reactiveRuntimeConfig,
+            final RuntimeValue<DataSourcesReactiveMSSQLConfig> reactiveMSSQLRuntimeConfig) {
+        this.runtimeConfig = runtimeConfig;
+        this.reactiveRuntimeConfig = reactiveRuntimeConfig;
+        this.reactiveMSSQLRuntimeConfig = reactiveMSSQLRuntimeConfig;
+    }
+
+    public Supplier<ActiveResult> poolCheckActiveSupplier(String dataSourceName) {
+        return new Supplier<>() {
+            @Override
+            public ActiveResult get() {
+                Optional<Boolean> active = runtimeConfig.getValue().dataSources().get(dataSourceName).active();
+                if (active.isPresent() && !active.get()) {
+                    return ActiveResult.inactive(DataSourceUtil.dataSourceInactiveReasonDeactivated(dataSourceName));
+                }
+                if (reactiveRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive().url().isEmpty()) {
+                    return ActiveResult.inactive(DataSourceUtil.dataSourceInactiveReasonUrlMissing(dataSourceName,
+                            "reactive.url"));
+                }
+                return ActiveResult.active();
+            }
+        };
+    }
+
+    public Function<SyntheticCreationalContext<MSSQLPool>, MSSQLPool> configureMSSQLPool(RuntimeValue<Vertx> vertx,
+            Supplier<Integer> eventLoopCount, String dataSourceName, ShutdownContext shutdown) {
         return new Function<>() {
             @Override
             public MSSQLPool apply(SyntheticCreationalContext<MSSQLPool> context) {
-                if (context.getInjectedReference(DataSourceSupport.class).getInactiveNames().contains(dataSourceName)) {
-                    throw DataSourceUtil.dataSourceInactive(dataSourceName);
-                }
                 MSSQLPool pool = initialize((VertxInternal) vertx.getValue(),
                         eventLoopCount.get(),
                         dataSourceName,
-                        dataSourcesRuntimeConfig.dataSources().get(dataSourceName),
-                        dataSourcesReactiveRuntimeConfig.getDataSourceReactiveRuntimeConfig(dataSourceName),
-                        dataSourcesReactiveMSSQLConfig.dataSources().get(dataSourceName).reactive().mssql(),
+                        runtimeConfig.getValue().dataSources().get(dataSourceName),
+                        reactiveRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive(),
+                        reactiveMSSQLRuntimeConfig.getValue().dataSources().get(dataSourceName).reactive().mssql(),
                         context);
 
                 shutdown.addShutdownTask(pool::close);
@@ -80,12 +104,13 @@ public class MSSQLPoolRecorder {
     }
 
     public Function<SyntheticCreationalContext<io.vertx.mutiny.mssqlclient.MSSQLPool>, io.vertx.mutiny.mssqlclient.MSSQLPool> mutinyMSSQLPool(
-            Function<SyntheticCreationalContext<MSSQLPool>, MSSQLPool> function) {
-        return new Function<SyntheticCreationalContext<io.vertx.mutiny.mssqlclient.MSSQLPool>, io.vertx.mutiny.mssqlclient.MSSQLPool>() {
+            String dataSourceName) {
+        return new Function<>() {
             @Override
             @SuppressWarnings("unchecked")
             public io.vertx.mutiny.mssqlclient.MSSQLPool apply(SyntheticCreationalContext context) {
-                return io.vertx.mutiny.mssqlclient.MSSQLPool.newInstance(function.apply(context));
+                return io.vertx.mutiny.mssqlclient.MSSQLPool.newInstance(
+                        (MSSQLPool) context.getInjectedReference(MSSQLPool.class, qualifier(dataSourceName)));
             }
         };
     }
@@ -96,8 +121,7 @@ public class MSSQLPoolRecorder {
             DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig,
             DataSourceReactiveMSSQLConfig dataSourceReactiveMSSQLConfig,
             SyntheticCreationalContext<MSSQLPool> context) {
-        PoolOptions poolOptions = toPoolOptions(eventLoopCount, dataSourceRuntimeConfig, dataSourceReactiveRuntimeConfig,
-                dataSourceReactiveMSSQLConfig);
+        PoolOptions poolOptions = toPoolOptions(eventLoopCount, dataSourceReactiveRuntimeConfig);
         MSSQLConnectOptions mssqlConnectOptions = toMSSQLConnectOptions(dataSourceName, dataSourceRuntimeConfig,
                 dataSourceReactiveRuntimeConfig, dataSourceReactiveMSSQLConfig);
         Supplier<Future<MSSQLConnectOptions>> databasesSupplier = toDatabasesSupplier(vertx, List.of(mssqlConnectOptions),
@@ -121,10 +145,7 @@ public class MSSQLPoolRecorder {
         return supplier;
     }
 
-    private PoolOptions toPoolOptions(Integer eventLoopCount,
-            DataSourceRuntimeConfig dataSourceRuntimeConfig,
-            DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig,
-            DataSourceReactiveMSSQLConfig dataSourceReactiveMSSQLConfig) {
+    private PoolOptions toPoolOptions(Integer eventLoopCount, DataSourceReactiveRuntimeConfig dataSourceReactiveRuntimeConfig) {
         PoolOptions poolOptions;
         poolOptions = new PoolOptions();
 
@@ -220,9 +241,11 @@ public class MSSQLPoolRecorder {
         configureJksKeyCertOptions(mssqlConnectOptions, dataSourceReactiveRuntimeConfig.keyCertificateJks());
         configurePfxKeyCertOptions(mssqlConnectOptions, dataSourceReactiveRuntimeConfig.keyCertificatePfx());
 
-        if (dataSourceReactiveRuntimeConfig.hostnameVerificationAlgorithm().isPresent()) {
-            mssqlConnectOptions.setHostnameVerificationAlgorithm(
-                    dataSourceReactiveRuntimeConfig.hostnameVerificationAlgorithm().get());
+        var algo = dataSourceReactiveRuntimeConfig.hostnameVerificationAlgorithm();
+        if ("NONE".equalsIgnoreCase(algo)) {
+            mssqlConnectOptions.setHostnameVerificationAlgorithm("");
+        } else {
+            mssqlConnectOptions.setHostnameVerificationAlgorithm(algo);
         }
 
         dataSourceReactiveRuntimeConfig.additionalProperties().forEach(mssqlConnectOptions::addProperty);
@@ -239,18 +262,13 @@ public class MSSQLPoolRecorder {
     private MSSQLPool createPool(Vertx vertx, PoolOptions poolOptions, MSSQLConnectOptions mSSQLConnectOptions,
             String dataSourceName, Supplier<Future<MSSQLConnectOptions>> databases,
             SyntheticCreationalContext<MSSQLPool> context) {
-        Instance<MSSQLPoolCreator> instance;
-        if (DataSourceUtil.isDefault(dataSourceName)) {
-            instance = context.getInjectedReference(TYPE_LITERAL);
-        } else {
-            instance = context.getInjectedReference(TYPE_LITERAL,
-                    new ReactiveDataSource.ReactiveDataSourceLiteral(dataSourceName));
-        }
+        Instance<MSSQLPoolCreator> instance = context.getInjectedReference(POOL_CREATOR_TYPE_LITERAL,
+                qualifier(dataSourceName));
         if (instance.isResolvable()) {
             MSSQLPoolCreator.Input input = new DefaultInput(vertx, poolOptions, mSSQLConnectOptions);
-            return instance.get().create(input);
+            return (MSSQLPool) instance.get().create(input);
         }
-        return MSSQLPool.pool(vertx, databases, poolOptions);
+        return (MSSQLPool) MSSQLDriver.INSTANCE.createPool(vertx, databases, poolOptions);
     }
 
     private static class DefaultInput implements MSSQLPoolCreator.Input {
@@ -278,5 +296,9 @@ public class MSSQLPoolRecorder {
         public MSSQLConnectOptions msSQLConnectOptions() {
             return mSSQLConnectOptions;
         }
+    }
+
+    public RuntimeValue<MSSQLPoolSupport> createMSSQLPoolSupport(Set<String> msSQLPoolNames) {
+        return new RuntimeValue<>(new MSSQLPoolSupport(msSQLPoolNames));
     }
 }

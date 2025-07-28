@@ -1,5 +1,7 @@
 package io.quarkus.elasticsearch.restclient.common.deployment;
 
+import static io.quarkus.devservices.common.ContainerLocator.locateContainerWithLabels;
+
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
@@ -19,29 +21,34 @@ import org.testcontainers.utility.DockerImageName;
 
 import io.quarkus.builder.BuildException;
 import io.quarkus.deployment.Feature;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
+import io.quarkus.deployment.builditem.DevServicesComposeProjectBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
+import io.quarkus.deployment.builditem.DevServicesResultBuildItem.RunningDevService;
 import io.quarkus.deployment.builditem.DevServicesSharedNetworkBuildItem;
 import io.quarkus.deployment.builditem.DockerStatusBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.console.ConsoleInstalledBuildItem;
 import io.quarkus.deployment.console.StartupLogCompressor;
-import io.quarkus.deployment.dev.devservices.GlobalDevServicesConfig;
+import io.quarkus.deployment.dev.devservices.DevServicesConfig;
 import io.quarkus.deployment.logging.LoggingSetupBuildItem;
+import io.quarkus.devservices.common.ComposeLocator;
 import io.quarkus.devservices.common.ConfigureUtil;
 import io.quarkus.devservices.common.ContainerAddress;
 import io.quarkus.devservices.common.ContainerLocator;
 import io.quarkus.devservices.common.ContainerShutdownCloseable;
-import io.quarkus.elasticsearch.restclient.common.deployment.ElasticsearchDevServicesBuildTimeConfig.Distribution;
+import io.quarkus.devservices.common.Labels;
+import io.quarkus.elasticsearch.restclient.common.deployment.ElasticsearchCommonBuildTimeConfig.ElasticsearchDevServicesBuildTimeConfig;
+import io.quarkus.elasticsearch.restclient.common.deployment.ElasticsearchCommonBuildTimeConfig.ElasticsearchDevServicesBuildTimeConfig.Distribution;
 import io.quarkus.runtime.configuration.ConfigUtils;
 
 /**
  * Starts an Elasticsearch server as dev service if needed.
  */
-@BuildSteps(onlyIfNot = IsNormal.class, onlyIf = GlobalDevServicesConfig.Enabled.class)
+@BuildSteps(onlyIf = { IsDevServicesSupportedByLaunchMode.class, DevServicesConfig.Enabled.class })
 public class DevServicesElasticsearchProcessor {
     private static final Logger log = Logger.getLogger(DevServicesElasticsearchProcessor.class);
 
@@ -50,28 +57,31 @@ public class DevServicesElasticsearchProcessor {
      * This allows other applications to discover the running service and use it instead of starting a new instance.
      */
     static final String DEV_SERVICE_LABEL = "quarkus-dev-service-elasticsearch";
+    static final String NEW_DEV_SERVICE_LABEL = "io.quarkus.devservice.elasticsearch";
     static final int ELASTICSEARCH_PORT = 9200;
 
-    private static final ContainerLocator elasticsearchContainerLocator = new ContainerLocator(DEV_SERVICE_LABEL,
-            ELASTICSEARCH_PORT);
+    private static final ContainerLocator elasticsearchContainerLocator = locateContainerWithLabels(ELASTICSEARCH_PORT,
+            DEV_SERVICE_LABEL, NEW_DEV_SERVICE_LABEL);
+
     private static final Distribution DEFAULT_DISTRIBUTION = Distribution.ELASTIC;
     private static final String DEV_SERVICE_ELASTICSEARCH = "elasticsearch";
     private static final String DEV_SERVICE_OPENSEARCH = "opensearch";
 
-    static volatile DevServicesResultBuildItem.RunningDevService devService;
-    static volatile ElasticsearchDevServicesBuildTimeConfig cfg;
+    static volatile RunningDevService devService;
+    static volatile ElasticsearchCommonBuildTimeConfig cfg;
     static volatile boolean first = true;
 
     @BuildStep
     public DevServicesResultBuildItem startElasticsearchDevService(
             DockerStatusBuildItem dockerStatusBuildItem,
+            DevServicesComposeProjectBuildItem composeProjectBuildItem,
             LaunchModeBuildItem launchMode,
-            ElasticsearchDevServicesBuildTimeConfig configuration,
+            ElasticsearchCommonBuildTimeConfig configuration,
             List<DevServicesSharedNetworkBuildItem> devServicesSharedNetworkBuildItem,
             Optional<ConsoleInstalledBuildItem> consoleInstalledBuildItem,
             CuratedApplicationShutdownBuildItem closeBuildItem,
             LoggingSetupBuildItem loggingSetupBuildItem,
-            GlobalDevServicesConfig devServicesConfig,
+            DevServicesConfig devServicesConfig,
             List<DevservicesElasticsearchBuildItem> devservicesElasticsearchBuildItems) throws BuildException {
 
         if (devservicesElasticsearchBuildItems.isEmpty()) {
@@ -95,9 +105,10 @@ public class DevServicesElasticsearchProcessor {
                 (launchMode.isTest() ? "(test) " : "") + "Dev Services for Elasticsearch starting:",
                 consoleInstalledBuildItem, loggingSetupBuildItem);
         try {
-            devService = startElasticsearch(dockerStatusBuildItem, configuration, buildItemsConfig, launchMode,
-                    !devServicesSharedNetworkBuildItem.isEmpty(),
-                    devServicesConfig.timeout);
+            boolean useSharedNetwork = DevServicesSharedNetworkBuildItem.isSharedNetworkRequired(devServicesConfig,
+                    devServicesSharedNetworkBuildItem);
+            devService = startElasticsearchDevServices(dockerStatusBuildItem, composeProjectBuildItem,
+                    configuration.devservices(), buildItemsConfig, launchMode, useSharedNetwork, devServicesConfig.timeout());
             if (devService == null) {
                 compressor.closeAndDumpCaptured();
             } else {
@@ -154,12 +165,13 @@ public class DevServicesElasticsearchProcessor {
         }
     }
 
-    private DevServicesResultBuildItem.RunningDevService startElasticsearch(
+    private RunningDevService startElasticsearchDevServices(
             DockerStatusBuildItem dockerStatusBuildItem,
+            DevServicesComposeProjectBuildItem composeProjectBuildItem,
             ElasticsearchDevServicesBuildTimeConfig config,
             DevservicesElasticsearchBuildItemsConfiguration buildItemConfig,
             LaunchModeBuildItem launchMode, boolean useSharedNetwork, Optional<Duration> timeout) throws BuildException {
-        if (!config.enabled.orElse(true)) {
+        if (!config.enabled().orElse(true)) {
             // explicitly disabled
             log.debug("Not starting Dev Services for Elasticsearch, as it has been disabled in the config.");
             return null;
@@ -167,13 +179,13 @@ public class DevServicesElasticsearchProcessor {
 
         for (String hostsConfigProperty : buildItemConfig.hostsConfigProperties) {
             // Check if elasticsearch hosts property is set
-            if (ConfigUtils.isPropertyPresent(hostsConfigProperty)) {
+            if (ConfigUtils.isPropertyNonEmpty(hostsConfigProperty)) {
                 log.debugf("Not starting Dev Services for Elasticsearch, the %s property is configured.", hostsConfigProperty);
                 return null;
             }
         }
 
-        if (!dockerStatusBuildItem.isDockerAvailable()) {
+        if (!dockerStatusBuildItem.isContainerRuntimeAvailable()) {
             log.warnf("Docker isn't working, please configure the Elasticsearch hosts property (%s).",
                     displayProperties(buildItemConfig.hostsConfigProperties));
             return null;
@@ -183,39 +195,48 @@ public class DevServicesElasticsearchProcessor {
         DockerImageName resolvedImageName = resolveImageName(config, resolvedDistribution);
 
         final Optional<ContainerAddress> maybeContainerAddress = elasticsearchContainerLocator.locateContainer(
-                config.serviceName,
-                config.shared,
-                launchMode.getLaunchMode());
+                config.serviceName(),
+                config.shared(),
+                launchMode.getLaunchMode())
+                .or(() -> ComposeLocator.locateContainer(composeProjectBuildItem,
+                        List.of(resolvedImageName.getUnversionedPart(), "elasticsearch", "opensearch"),
+                        ELASTICSEARCH_PORT,
+                        launchMode.getLaunchMode(), useSharedNetwork));
 
         // Starting the server
-        final Supplier<DevServicesResultBuildItem.RunningDevService> defaultElasticsearchSupplier = () -> {
+        final Supplier<RunningDevService> defaultElasticsearchSupplier = () -> {
 
-            GenericContainer<?> container = resolvedDistribution.equals(Distribution.ELASTIC)
-                    ? createElasticsearchContainer(config, resolvedImageName, useSharedNetwork)
-                    : createOpensearchContainer(config, resolvedImageName, useSharedNetwork);
+            String defaultNetworkId = composeProjectBuildItem.getDefaultNetworkId();
+            CreatedContainer createdContainer = resolvedDistribution.equals(Distribution.ELASTIC)
+                    ? createElasticsearchContainer(config, resolvedImageName, defaultNetworkId, useSharedNetwork)
+                    : createOpensearchContainer(config, resolvedImageName, defaultNetworkId, useSharedNetwork);
+            GenericContainer<?> container = createdContainer.genericContainer();
 
-            if (config.serviceName != null) {
-                container.withLabel(DEV_SERVICE_LABEL, config.serviceName);
+            if (config.serviceName() != null) {
+                container.withLabel(DEV_SERVICE_LABEL, config.serviceName());
+                container.withLabel(Labels.QUARKUS_DEV_SERVICE, config.serviceName());
             }
-            if (config.port.isPresent()) {
-                container.setPortBindings(List.of(config.port.get() + ":" + ELASTICSEARCH_PORT));
+            if (config.port().isPresent()) {
+                container.setPortBindings(List.of(config.port().get() + ":" + ELASTICSEARCH_PORT));
             }
             timeout.ifPresent(container::withStartupTimeout);
 
-            container.withEnv(config.containerEnv);
+            container.withEnv(config.containerEnv());
 
-            container.withReuse(config.reuse);
+            container.withReuse(config.reuse());
 
             container.start();
-            return new DevServicesResultBuildItem.RunningDevService(Feature.ELASTICSEARCH_REST_CLIENT_COMMON.getName(),
+
+            var httpHost = createdContainer.hostName + ":"
+                    + (useSharedNetwork ? ELASTICSEARCH_PORT : container.getMappedPort(ELASTICSEARCH_PORT));
+            return new RunningDevService(Feature.ELASTICSEARCH_REST_CLIENT_COMMON.getName(),
                     container.getContainerId(),
                     new ContainerShutdownCloseable(container, "Elasticsearch"),
-                    buildPropertiesMap(buildItemConfig,
-                            container.getHost() + ":" + container.getMappedPort(ELASTICSEARCH_PORT)));
+                    buildPropertiesMap(buildItemConfig, httpHost));
         };
 
         return maybeContainerAddress
-                .map(containerAddress -> new DevServicesResultBuildItem.RunningDevService(
+                .map(containerAddress -> new RunningDevService(
                         Feature.ELASTICSEARCH_REST_CLIENT_COMMON.getName(),
                         containerAddress.getId(),
                         null,
@@ -223,32 +244,30 @@ public class DevServicesElasticsearchProcessor {
                 .orElseGet(defaultElasticsearchSupplier);
     }
 
-    private GenericContainer<?> createElasticsearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
-            DockerImageName resolvedImageName, boolean useSharedNetwork) {
+    private CreatedContainer createElasticsearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
+            DockerImageName resolvedImageName, String defaultNetworkId, boolean useSharedNetwork) {
         ElasticsearchContainer container = new ElasticsearchContainer(
                 resolvedImageName.asCompatibleSubstituteFor("docker.elastic.co/elasticsearch/elasticsearch"));
-        if (useSharedNetwork) {
-            ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_ELASTICSEARCH);
-        }
+        String hostName = ConfigureUtil.configureNetwork(container, defaultNetworkId, useSharedNetwork,
+                DEV_SERVICE_ELASTICSEARCH);
 
         // Disable security as else we would need to configure it correctly to avoid tons of WARNING in the log
         container.addEnv("xpack.security.enabled", "false");
         // Disable disk-based shard allocation thresholds:
         // in a single-node setup they just don't make sense,
         // and lead to problems on large disks with little space left.
-        // See https://www.elastic.co/guide/en/elasticsearch/reference/8.12/modules-cluster.html#disk-based-shard-allocation
+        // See https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-cluster.html#disk-based-shard-allocation
         container.addEnv("cluster.routing.allocation.disk.threshold_enabled", "false");
-        container.addEnv("ES_JAVA_OPTS", config.javaOpts);
-        return container;
+        container.addEnv("ES_JAVA_OPTS", config.javaOpts());
+
+        return new CreatedContainer(container, hostName);
     }
 
-    private GenericContainer<?> createOpensearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
-            DockerImageName resolvedImageName, boolean useSharedNetwork) {
+    private CreatedContainer createOpensearchContainer(ElasticsearchDevServicesBuildTimeConfig config,
+            DockerImageName resolvedImageName, String defaultNetworkId, boolean useSharedNetwork) {
         OpensearchContainer container = new OpensearchContainer(
                 resolvedImageName.asCompatibleSubstituteFor("opensearchproject/opensearch"));
-        if (useSharedNetwork) {
-            ConfigureUtil.configureSharedNetwork(container, DEV_SERVICE_OPENSEARCH);
-        }
+        String hostName = ConfigureUtil.configureNetwork(container, defaultNetworkId, useSharedNetwork, DEV_SERVICE_OPENSEARCH);
 
         container.addEnv("bootstrap.memory_lock", "true");
         container.addEnv("plugins.index_state_management.enabled", "false");
@@ -257,13 +276,21 @@ public class DevServicesElasticsearchProcessor {
         // which will never happen since we only have one node.
         // See https://opensearch.org/docs/latest/api-reference/cluster-api/cluster-settings/
         container.addEnv("cluster.routing.allocation.disk.threshold_enabled", "false");
-        container.addEnv("OPENSEARCH_JAVA_OPTS", config.javaOpts);
-        return container;
+        container.addEnv("OPENSEARCH_JAVA_OPTS", config.javaOpts());
+        // OpenSearch 2.12 and later requires an admin password, or it won't start.
+        // Considering dev services are transient and not intended for production by nature,
+        // we'll just set some hardcoded password.
+        container.addEnv("OPENSEARCH_INITIAL_ADMIN_PASSWORD", "NotActua11y$trongPa$$word");
+
+        return new CreatedContainer(container, hostName);
+    }
+
+    private record CreatedContainer(GenericContainer<?> genericContainer, String hostName) {
     }
 
     private DockerImageName resolveImageName(ElasticsearchDevServicesBuildTimeConfig config,
             Distribution resolvedDistribution) {
-        return DockerImageName.parse(config.imageName.orElseGet(() -> ConfigureUtil.getDefaultImageNameFor(
+        return DockerImageName.parse(config.imageName().orElseGet(() -> ConfigureUtil.getDefaultImageNameFor(
                 Distribution.ELASTIC.equals(resolvedDistribution)
                         ? DEV_SERVICE_ELASTICSEARCH
                         : DEV_SERVICE_OPENSEARCH)));
@@ -272,12 +299,12 @@ public class DevServicesElasticsearchProcessor {
     private Distribution resolveDistribution(ElasticsearchDevServicesBuildTimeConfig config,
             DevservicesElasticsearchBuildItemsConfiguration buildItemConfig) throws BuildException {
         // First, let's see if it was explicitly configured:
-        if (config.distribution.isPresent()) {
-            return config.distribution.get();
+        if (config.distribution().isPresent()) {
+            return config.distribution().get();
         }
         // Now let's see if we can guess it from the image:
-        if (config.imageName.isPresent()) {
-            String imageNameRepository = DockerImageName.parse(config.imageName.get()).getRepository()
+        if (config.imageName().isPresent()) {
+            String imageNameRepository = DockerImageName.parse(config.imageName().get()).getRepository()
                     .toLowerCase(Locale.ROOT);
             if (imageNameRepository.contains(DEV_SERVICE_OPENSEARCH)) {
                 return Distribution.OPENSEARCH;
@@ -288,7 +315,7 @@ public class DevServicesElasticsearchProcessor {
             // no luck guessing so let's ask user to be more explicit:
             throw new BuildException(
                     "Wasn't able to determine the distribution of the search service based on the provided image name ["
-                            + config.imageName.get()
+                            + config.imageName().get()
                             + "]. Please specify the distribution explicitly.",
                     Collections.emptyList());
         }

@@ -8,7 +8,9 @@ import io.quarkus.devtools.project.BuildTool;
 import picocli.CommandLine;
 
 @CommandLine.Command(name = "build", sortOptions = false, showDefaultValues = true, mixinStandardHelpOptions = false, header = "Build a container image.", description = "%n"
-        + "This command will build a container image for the project.", subcommands = { Docker.class, Buildpack.class,
+        + "This command will build a container image for the project.", subcommands = { Docker.class,
+                Podman.class,
+                Buildpack.class,
                 Jib.class,
                 Openshift.class }, footer = { "%n"
                         + "For example (using default values), it will create a container image using docker with REPOSITORY='${user.name}/<project.artifactId>' and TAG='<project.version>'."
@@ -18,7 +20,7 @@ public class Build extends BaseImageCommand {
     private static final String FALLBACK_BUILDER = "docker";
 
     private static final Map<BuildTool, String> ACTION_MAPPING = Map.of(BuildTool.MAVEN, "quarkus:image-build",
-            BuildTool.GRADLE, "imageBuild");
+            BuildTool.GRADLE, "imageBuild", BuildTool.GRADLE_KOTLIN_DSL, "imageBuild");
 
     @Override
     public void populateContext(BuildToolContext context) {

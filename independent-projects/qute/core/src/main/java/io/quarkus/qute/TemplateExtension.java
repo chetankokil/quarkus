@@ -40,8 +40,7 @@ import java.lang.annotation.Target;
  * <h2>Matching by name</h2>
  *
  * By default, the method name is used to match the expression property/method name. However, it is possible to specify the
- * matching name with
- * {@link #matchName()}.
+ * matching name with {@link #matchName()}.
  *
  * <pre>
  * {@literal @}TemplateExtension(matchName = "discounted")
@@ -107,26 +106,34 @@ public @interface TemplateExtension {
     int DEFAULT_PRIORITY = 5;
 
     /**
+     * If {@link #ANY} is used then an additional string method parameter must be used to pass the actual property name.
      *
      * @return the name is used to match the property name
      */
     String matchName() default METHOD_NAME;
 
     /**
+     * Note that an additional string method parameter must be used to pass the actual property name.
      *
      * @return the list of names used to match the property name
      */
     String[] matchNames() default {};
 
     /**
+     * Note that an additional string method parameter must be used to pass the actual property name.
      *
      * @return the regex is used to match the property name
      */
     String matchRegex() default "";
 
     /**
+     * Value resolvers with higher priority take precedence.
+     * <p>
+     * Keep in mind that the reflection-based value resolver has priority {@code -1} and the max priority value for
+     * resolvers generated from {@link TemplateData} and type-safe expressions is {@code 10}.
      *
      * @return the priority used by the generated value resolver
+     * @see ValueResolver#getPriority()
      */
     int priority() default DEFAULT_PRIORITY;
 

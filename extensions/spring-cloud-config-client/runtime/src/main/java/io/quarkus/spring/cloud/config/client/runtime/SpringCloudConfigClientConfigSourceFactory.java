@@ -11,11 +11,11 @@ import java.util.Map;
 import org.eclipse.microprofile.config.spi.ConfigSource;
 import org.jboss.logging.Logger;
 
-import io.quarkus.arc.runtime.appcds.AppCDSRecorder;
+import io.quarkus.runtime.ApplicationLifecycleManager;
+import io.quarkus.runtime.util.StringUtil;
 import io.quarkus.spring.cloud.config.client.runtime.Response.PropertySource;
 import io.smallrye.config.ConfigSourceContext;
 import io.smallrye.config.ConfigSourceFactory.ConfigurableConfigSourceFactory;
-import io.smallrye.config.ConfigValue;
 import io.smallrye.config.common.MapBackedConfigSource;
 
 public class SpringCloudConfigClientConfigSourceFactory
@@ -26,7 +26,7 @@ public class SpringCloudConfigClientConfigSourceFactory
     public Iterable<ConfigSource> getConfigSources(final ConfigSourceContext context,
             final SpringCloudConfigClientConfig config) {
         boolean inAppCDsGeneration = Boolean
-                .parseBoolean(System.getProperty(AppCDSRecorder.QUARKUS_APPCDS_GENERATE_PROP, "false"));
+                .parseBoolean(System.getProperty(ApplicationLifecycleManager.QUARKUS_APPCDS_GENERATE_PROP, "false"));
         if (inAppCDsGeneration) {
             return Collections.emptyList();
         }
@@ -39,10 +39,10 @@ public class SpringCloudConfigClientConfigSourceFactory
             return sources;
         }
 
-        ConfigValue applicationName = context.getValue("quarkus.application.name");
-        if (applicationName == null || applicationName.getValue() == null) {
+        String applicationName = config.name();
+        if (StringUtil.isNullOrEmpty(applicationName)) {
             log.warn(
-                    "No attempt will be made to obtain configuration from the Spring Cloud Config Server because the application name has not been set. Consider setting it via 'quarkus.application.name'");
+                    "No attempt will be made to obtain configuration from the Spring Cloud Config Server because the application name has not been set. Consider setting it via 'quarkus.spring-cloud-config.name'");
             return sources;
         }
 
@@ -58,10 +58,10 @@ public class SpringCloudConfigClientConfigSourceFactory
             for (String profile : profiles) {
                 Response response;
                 if (connectionTimeoutIsGreaterThanZero || readTimeoutIsGreaterThanZero) {
-                    response = client.exchange(applicationName.getValue(), profile).await()
+                    response = client.exchange(applicationName, profile).await()
                             .atMost(config.connectionTimeout().plus(config.readTimeout().multipliedBy(2)));
                 } else {
-                    response = client.exchange(applicationName.getValue(), profile).await().indefinitely();
+                    response = client.exchange(applicationName, profile).await().indefinitely();
                 }
 
                 if (response.getProfiles().contains(profile)) {
@@ -73,7 +73,7 @@ public class SpringCloudConfigClientConfigSourceFactory
 
             log.debug("Obtained " + responses.size() + " from the config server");
 
-            int ordinal = 450;
+            int ordinal = config.ordinal();
             // Profiles are looked from the highest ordinal to lowest, so we reverse the collection to build the source list
             Collections.reverse(responses);
             for (Response response : responses) {

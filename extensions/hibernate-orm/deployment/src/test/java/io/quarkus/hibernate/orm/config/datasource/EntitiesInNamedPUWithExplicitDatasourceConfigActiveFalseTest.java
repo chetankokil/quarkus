@@ -17,7 +17,7 @@ public class EntitiesInNamedPUWithExplicitDatasourceConfigActiveFalseTest {
             .withApplicationRoot((jar) -> jar
                     .addPackage(MyEntity.class.getPackage().getName()))
             .overrideConfigKey("quarkus.hibernate-orm.pu-1.datasource", "ds-1")
-            .overrideConfigKey("quarkus.hibernate-orm.pu-1.database.generation", "drop-and-create")
+            .overrideConfigKey("quarkus.hibernate-orm.pu-1.schema-management.strategy", "drop-and-create")
             .overrideConfigKey("quarkus.datasource.\"ds-1\".active", "false")
             // We need at least one build-time property for the datasource,
             // otherwise it's considered unconfigured at build time...
@@ -27,8 +27,8 @@ public class EntitiesInNamedPUWithExplicitDatasourceConfigActiveFalseTest {
                     .hasMessageContainingAll(
                             "Unable to find datasource 'ds-1' for persistence unit 'pu-1'",
                             "Datasource 'ds-1' was deactivated through configuration properties.",
-                            "To solve this, avoid accessing this datasource at runtime, for instance by deactivating consumers (persistence units, ...).",
-                            "Alternatively, activate the datasource by setting configuration property 'quarkus.datasource.\"ds-1\".active'"
+                            "To avoid this exception while keeping the bean inactive", // Message from Arc with generic hints
+                            "To activate the datasource, set configuration property 'quarkus.datasource.\"ds-1\".active'"
                                     + " to 'true' and configure datasource 'ds-1'",
                             "Refer to https://quarkus.io/guides/datasource for guidance."));
 

@@ -14,7 +14,9 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -22,22 +24,22 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import io.micrometer.common.docs.KeyName;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
-import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import io.micrometer.core.instrument.binder.netty4.NettyAllocatorMetrics;
 import io.micrometer.core.instrument.binder.netty4.NettyEventExecutorMetrics;
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.buffer.UnpooledByteBufAllocator;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.SingleThreadEventExecutor;
+import io.quarkus.micrometer.runtime.binder.netty.NettyAllocatorMetrics;
+import io.quarkus.micrometer.runtime.binder.netty.NettyMetricsProvider;
+import io.quarkus.micrometer.runtime.binder.netty.VertxNettyAllocatorMetricsProvider;
 import io.quarkus.micrometer.test.HelloResource;
 import io.quarkus.test.QuarkusUnitTest;
 import io.restassured.RestAssured;
 import io.vertx.core.Vertx;
-import io.vertx.core.buffer.impl.VertxByteBufAllocator;
 import io.vertx.core.impl.VertxInternal;
 
 public class NettyMetricsTest {
@@ -53,51 +55,47 @@ public class NettyMetricsTest {
     @Any
     Instance<MeterBinder> binders;
 
-    @Inject
-    MeterRegistry registry;
+    final static SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+    @BeforeAll
+    static void setRegistry() {
+        Metrics.addRegistry(registry);
+    }
+
+    @AfterAll()
+    static void removeRegistry() {
+        Metrics.removeRegistry(registry);
+    }
 
     @Inject
     Vertx vertx;
 
     private static final Set<Tag> NAM_PBBA_TAGS = Tags.of(
-            "id", String.valueOf(PooledByteBufAllocator.DEFAULT.hashCode()),
+            "name", NettyMetricsProvider.NETTY_DEFAULT_POOLED_ALLOCATOR_NAME,
             "allocator.type", "PooledByteBufAllocator")
             .stream()
             .collect(Collectors.toSet());
 
     private static final Set<Tag> NAM_UNPBBA_TAGS = Tags.of(
-            "id", String.valueOf(UnpooledByteBufAllocator.DEFAULT.hashCode()),
+            "name", NettyMetricsProvider.NETTY_DEFAULT_UNPOOLED_ALLOCATOR_NAME,
             "allocator.type", "UnpooledByteBufAllocator")
             .stream()
             .collect(Collectors.toSet());
 
     private static final Set<Tag> VX_NAM_PBBA_TAGS = Tags.of(
-            "id", String.valueOf(VertxByteBufAllocator.POOLED_ALLOCATOR.hashCode()),
+            "name", VertxNettyAllocatorMetricsProvider.VERTX_POOLED_ALLOCATOR_NAME,
             "allocator.type", "PooledByteBufAllocator")
             .stream()
             .collect(Collectors.toSet());
 
     private static final Set<Tag> VX_NAM_UNPBBA_TAGS = Tags.of(
-            "id", String.valueOf(VertxByteBufAllocator.UNPOOLED_ALLOCATOR.hashCode()),
+            "name", VertxNettyAllocatorMetricsProvider.VERTX_UNPOOLED_ALLOCATOR_NAME,
             "allocator.type", "UnpooledByteBufAllocator")
             .stream()
             .collect(Collectors.toSet());
 
     private static final Tag HEAP_MEMORY = Tag.of(AllocatorMemoryKeyNames.MEMORY_TYPE.asString(), "heap");
     private static final Tag DIRECT_MEMORY = Tag.of(AllocatorMemoryKeyNames.MEMORY_TYPE.asString(), "direct");
-
-    enum AllocatorKeyNames implements KeyName {
-        ID {
-            public String asString() {
-                return "id";
-            }
-        },
-        ALLOCATOR_TYPE {
-            public String asString() {
-                return "allocator.type";
-            }
-        };
-    }
 
     enum AllocatorMemoryKeyNames implements KeyName {
         MEMORY_TYPE {

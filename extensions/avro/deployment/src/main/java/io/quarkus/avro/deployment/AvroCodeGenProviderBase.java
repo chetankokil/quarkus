@@ -26,8 +26,6 @@ public abstract class AvroCodeGenProviderBase implements CodeGenProvider {
 
     private static final Logger log = Logger.getLogger(AvroCodeGenProviderBase.class);
 
-    public static final String[] EMPTY = new String[0];
-
     /**
      * The directory (within the java classpath) that contains the velocity
      * templates to use for code generation.
@@ -122,8 +120,7 @@ public abstract class AvroCodeGenProviderBase implements CodeGenProvider {
 
         /**
          * The createOptionalGetters parameter enables generating the getOptional...
-         * methods that return an Optional of the requested type. This works ONLY on
-         * Java 8+
+         * methods that return an Optional of the requested type.
          */
         final boolean createOptionalGetters;
 
@@ -140,8 +137,7 @@ public abstract class AvroCodeGenProviderBase implements CodeGenProvider {
 
         /**
          * The gettersReturnOptional parameter enables generating get... methods that
-         * return an Optional of the requested type. This will replace the This works
-         * ONLY on Java 8+
+         * return an Optional of the requested type.
          */
         final boolean gettersReturnOptional;
 
@@ -149,7 +145,7 @@ public abstract class AvroCodeGenProviderBase implements CodeGenProvider {
          * The optionalGettersForNullableFieldsOnly parameter works in conjunction with
          * gettersReturnOptional option. If it is set, Optional getters will be
          * generated only for fields that are nullable. If the field is mandatory,
-         * regular getter will be generated. This works ONLY on Java 8+.
+         * regular getter will be generated.
          */
         final boolean optionalGettersForNullableFieldsOnly;
 

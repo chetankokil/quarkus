@@ -36,6 +36,7 @@ import jakarta.enterprise.context.Destroyed;
 import jakarta.enterprise.context.Initialized;
 import jakarta.enterprise.context.NormalScope;
 import jakarta.enterprise.context.RequestScoped;
+import jakarta.enterprise.context.SessionScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.inject.AmbiguousResolutionException;
 import jakarta.enterprise.inject.Any;
@@ -125,7 +126,7 @@ public class ArcContainerImpl implements ArcContainer {
 
         List<Components> components = new ArrayList<>();
         for (ComponentsProvider componentsProvider : ServiceLoader.load(ComponentsProvider.class)) {
-            components.add(componentsProvider.getComponents());
+            components.add(componentsProvider.getComponents(this.currentContextFactory));
         }
 
         for (Components c : components) {
@@ -207,9 +208,14 @@ public class ArcContainerImpl implements ArcContainer {
                 notifierOrNull(Set.of(BeforeDestroyed.Literal.REQUEST, Any.Literal.INSTANCE)),
                 notifierOrNull(Set.of(Destroyed.Literal.REQUEST, Any.Literal.INSTANCE)),
                 requestContextInstances != null ? requestContextInstances : ComputingCacheContextInstances::new);
+        SessionContext sessionContext = new SessionContext(this.currentContextFactory.create(SessionScoped.class),
+                notifierOrNull(Set.of(Initialized.Literal.SESSION, Any.Literal.INSTANCE)),
+                notifierOrNull(Set.of(BeforeDestroyed.Literal.SESSION, Any.Literal.INSTANCE)),
+                notifierOrNull(Set.of(Destroyed.Literal.SESSION, Any.Literal.INSTANCE)), ComputingCacheContextInstances::new);
 
         Contexts.Builder contextsBuilder = new Contexts.Builder(
                 requestContext,
+                sessionContext,
                 applicationContext,
                 new SingletonContext(),
                 new DependentContext());
@@ -400,6 +406,11 @@ public class ArcContainerImpl implements ArcContainer {
     }
 
     @Override
+    public ManagedContext sessionContext() {
+        return contexts.sessionContext;
+    }
+
+    @Override
     public BeanManager beanManager() {
         return BeanManagerImpl.INSTANCE.get();
     }
@@ -494,6 +505,11 @@ public class ArcContainerImpl implements ArcContainer {
         return observers;
     }
 
+    @Override
+    public <T> List<InjectableObserverMethod<? super T>> resolveObserverMethods(Type eventType, Annotation... eventQualifiers) {
+        return resolveObserverMethods(eventType, Set.of(eventQualifiers));
+    }
+
     InstanceHandle<Object> getResource(Type type, Set<Annotation> annotations) {
         for (ResourceReferenceProvider resourceProvider : resourceProviders) {
             InstanceHandle<Object> ret = resourceProvider.get(type, annotations);
@@ -548,14 +564,14 @@ public class ArcContainerImpl implements ArcContainer {
             }
             InjectionPoint prev = null;
             if (resetCurrentInjectionPoint) {
-                prev = InjectionPointProvider.set(CurrentInjectionPointProvider.EMPTY);
+                prev = InjectionPointProvider.setCurrent(creationalContext, CurrentInjectionPointProvider.EMPTY);
             }
             try {
                 return new EagerInstanceHandle<>(bean, bean.get(creationalContext), creationalContext, parentContext,
                         destroyLogic);
             } finally {
                 if (resetCurrentInjectionPoint) {
-                    InjectionPointProvider.set(prev);
+                    InjectionPointProvider.setCurrent(creationalContext, prev);
                 }
             }
         } else {
@@ -871,7 +887,8 @@ public class ArcContainerImpl implements ArcContainer {
     }
 
     @SuppressWarnings("unchecked")
-    <T> List<InjectableObserverMethod<? super T>> resolveObservers(Type eventType, Set<Annotation> eventQualifiers) {
+    <T> List<InjectableObserverMethod<? super T>> resolveObserverMethods(Type eventType,
+            Set<Annotation> eventQualifiers) {
         registeredQualifiers.verify(eventQualifiers);
         if (observers.isEmpty()) {
             return Collections.emptyList();

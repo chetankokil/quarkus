@@ -11,10 +11,18 @@ include::_attributes.adoc[]
 
 The Quarkus extension ecosystem consists of the Quarkus extensions developed and maintained by the community, including the Quarkus core development team. While the Quarkus ecosystem (sometimes also referred to as the "Quarkus universe") includes all the Quarkus extensions ever developed, there is also a concept of a Quarkus platform.
 
-== Quarkus Platform
+== What is the Quarkus Platform?
+
+The Quarkus Platform is a curated set of extensions, tools, and configurations that make it easier to build, test, and deploy Java applications with Quarkus.
 
 The fundamental promise of a Quarkus platform is any combination of the Quarkus extensions the platform consists of can be used in the same application without causing any conflict for each other.
 Each organization creating their Quarkus platform may establish their own criteria for the extensions to be accepted into the platform and the means to guarantee the compatibility between the accepted extensions.
+
+== How does the Quarkus Platform help?
+When multiple extensions are used in the same project, a Quarkus platform BOM ensures:
+* version compatibility between the dependencies;
+* simplified dependency management;
+* easier upgrades.
 
 === Quarkus Platform Artifacts
 
@@ -129,8 +137,24 @@ A platform properties file for the example above would contain:
 
 [source,text,subs=attributes+]
 ----
-platform.quarkus.native.builder-image=quay.io/quarkus/ubi-quarkus-mandrel-builder-image:{mandrel-flavor}
+platform.quarkus.native.builder-image=quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:{mandrel-flavor}
 ----
+
+[IMPORTANT]
+====
+Starting with Quarkus 3.19+, the _builder_ image used to build the native executable is based on UBI 9.
+It means that the native executable produced by the container build will be based on UBI 9 as well.
+So, if you plan to build a container, make sure that the base image in your `Dockerfile` is compatible with UBI 9.
+The native executable will not run on UBI 8 base images.
+
+For example to switch back to an UBI8 _builder image_ you can use:
+
+`platform.quarkus.native.builder-image=quay.io/quarkus/ubi-quarkus-mandrel-builder-image:{mandrel-flavor}`
+
+You can see the available tags for UBI8 https://quay.io/repository/quarkus/ubi-quarkus-mandrel-builder-image?tab=tags[here]
+and for UBI9 https://quay.io/repository/quarkus/ubi9-quarkus-mandrel-builder-image?tab=tags[here (UBI 9)])
+====
+
 
 There is also a Maven plugin goal that validates the platform properties content and its artifact coordinates and also checks whether the platform properties artifact is present in the platform's BOM. Here is a sample plugin configuration:
 

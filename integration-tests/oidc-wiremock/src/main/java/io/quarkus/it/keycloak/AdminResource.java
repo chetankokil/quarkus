@@ -8,9 +8,12 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.resteasy.reactive.RestQuery;
 
 import io.quarkus.security.Authenticated;
+import io.quarkus.security.PermissionsAllowed;
 import io.quarkus.security.identity.SecurityIdentity;
+import io.vertx.ext.web.RoutingContext;
 
 /**
  * @author <a href="mailto:psilva@redhat.com">Pedro Igor</a>
@@ -20,6 +23,9 @@ public class AdminResource {
 
     @Inject
     SecurityIdentity identity;
+
+    @Inject
+    RoutingContext routingContext;
 
     @Path("bearer")
     @GET
@@ -34,6 +40,14 @@ public class AdminResource {
     @RolesAllowed("admin")
     @Produces(MediaType.APPLICATION_JSON)
     public String adminRequiredAlgorithm() {
+        return "granted:" + identity.getRoles();
+    }
+
+    @Path("bearer-required-claims")
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String adminRequiredClaims() {
         return "granted:" + identity.getRoles();
     }
 
@@ -53,11 +67,51 @@ public class AdminResource {
         return "granted:" + identity.getRoles();
     }
 
+    @Path("bearer-issuer-resolver/issuer") // don't change the path, avoid default tenant resolver
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String adminIssuerTest() {
+        return "static.tenant.id=" + routingContext.get("static.tenant.id");
+    }
+
+    @Path("bearer-encrypted-with-decryption-key")
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String bearerEncryptedWithDecryptionKey() {
+        return "granted:" + identity.getRoles();
+    }
+
+    @Path("bearer-encrypted-with-client-secret")
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String bearerEncryptedWithClientSecret() {
+        return "granted:" + identity.getRoles();
+    }
+
+    @Path("bearer-encrypted-without-decryption-key")
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String bearerEncryptedWithoutDecryptionKey() {
+        throw new RuntimeException("Unencrypted token can not be validated");
+    }
+
     @Path("bearer-certificate-full-chain")
     @GET
     @RolesAllowed("admin")
     @Produces(MediaType.APPLICATION_JSON)
     public String bearerCertificateFullChain() {
+        return "granted:" + identity.getRoles();
+    }
+
+    @Path("bearer-chain-custom-validator")
+    @GET
+    @RolesAllowed("admin")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String bearerCertificateCustomValidator() {
         return "granted:" + identity.getRoles();
     }
 
@@ -98,6 +152,14 @@ public class AdminResource {
     @RolesAllowed("admin")
     @Produces(MediaType.APPLICATION_JSON)
     public String adminWrongRolePath() {
+        return "granted:" + identity.getRoles();
+    }
+
+    @Path("bearer-permission-checker")
+    @GET
+    @PermissionsAllowed("admin-preferred-username")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String bearerPermissionChecker(@RestQuery String fail) {
         return "granted:" + identity.getRoles();
     }
 }

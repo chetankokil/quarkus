@@ -39,6 +39,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import io.quarkus.devtools.codestarts.quarkus.QuarkusCodestartCatalog;
 import io.quarkus.devtools.codestarts.quarkus.QuarkusCodestartCatalog.Language;
 import io.quarkus.devtools.codestarts.quarkus.QuarkusCodestartProjectInput;
+import io.quarkus.devtools.messagewriter.MessageWriter;
 import io.quarkus.devtools.project.BuildTool;
 import io.quarkus.devtools.project.QuarkusProjectHelper;
 import io.quarkus.devtools.testing.SnapshotTesting;
@@ -155,7 +156,7 @@ public class QuarkusCodestartTest implements BeforeAllCallback, AfterAllCallback
      */
     public void buildProject(Language language) throws IOException {
         final int exitCode = WrapperRunner.run(getProjectWithRealDataDir(language));
-        Assertions.assertThat(exitCode).as("Run project return status is zero").isZero();
+        Assertions.assertThat(exitCode).as("Run project return status should be zero").isZero();
     }
 
     /**
@@ -227,7 +228,7 @@ public class QuarkusCodestartTest implements BeforeAllCallback, AfterAllCallback
      * Very usefull to check if a file contains a specific String:
      * <br>
      * Example:<br>
-     * codestartTest.assertThatGeneratedFile(JAVA, "README.md").satisfies(checkContains("./mvnw compile quarkus:dev
+     * codestartTest.assertThatGeneratedFile(JAVA, "README.md").satisfies(checkContains("./mvnw quarkus:dev
      * -Dquarkus.args='Quarky"));
      *
      * @param language the language
@@ -354,7 +355,7 @@ public class QuarkusCodestartTest implements BeforeAllCallback, AfterAllCallback
     }
 
     protected List<ResourceLoader> getCodestartsResourceLoaders() {
-        return codestartLoadersBuilder()
+        return codestartLoadersBuilder(MessageWriter.info())
                 .catalog(getExtensionsCatalog())
                 .addExtraCodestartsArtifactCoords(artifacts)
                 .build();

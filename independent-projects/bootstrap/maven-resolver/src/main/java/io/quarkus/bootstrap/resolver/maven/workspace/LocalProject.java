@@ -104,13 +104,13 @@ public class LocalProject {
         return loadWorkspace(ctx, null);
     }
 
-    public static LocalProject loadWorkspace(BootstrapMavenContext ctx, Function<Path, Model> modelProvider)
+    public static LocalProject loadWorkspace(BootstrapMavenContext ctx, List<WorkspaceModulePom> providedModules)
             throws BootstrapMavenException {
         final Path currentProjectPom = ctx.getCurrentProjectPomOrNull();
         if (currentProjectPom == null) {
             return null;
         }
-        final WorkspaceLoader wsLoader = new WorkspaceLoader(ctx, currentProjectPom, modelProvider);
+        final WorkspaceLoader wsLoader = new WorkspaceLoader(ctx, currentProjectPom, providedModules);
         final Path rootProjectBaseDir = ctx.getRootProjectBaseDir();
         if (rootProjectBaseDir != null && !rootProjectBaseDir.equals(currentProjectPom.getParent())) {
             wsLoader.setWorkspaceRootPom(rootProjectBaseDir.resolve(POM_XML));
@@ -144,31 +144,46 @@ public class LocalProject {
     }
 
     private final Model rawModel;
+    private final Model effectiveModel;
+    private final ModelBuildingResult modelBuildingResult;
     private final ArtifactKey key;
     private String version;
     private final Path dir;
     private final LocalWorkspace workspace;
-    final List<LocalProject> modules = new ArrayList<>(0);
-    private final ModelBuildingResult modelBuildingResult;
     private volatile LocalProject parent;
     private volatile WorkspaceModule module;
 
+    /**
+     * TODO: linking LocalProject to a ModelBuildingResult is probably not a good idea.
+     * Perhaps, the result should be cached in the MavenModelBuilder instead.
+     *
+     * @param modelBuildingResult model building result
+     * @param workspace workspace
+     */
     LocalProject(ModelBuildingResult modelBuildingResult, LocalWorkspace workspace) {
+        this.modelBuildingResult = modelBuildingResult;
         this.rawModel = modelBuildingResult.getRawModel();
-        final Model effectiveModel = modelBuildingResult.getEffectiveModel();
+        this.effectiveModel = modelBuildingResult.getEffectiveModel();
         this.key = ArtifactKey.ga(effectiveModel.getGroupId(), effectiveModel.getArtifactId());
         this.version = effectiveModel.getVersion();
         this.dir = effectiveModel.getProjectDirectory().toPath();
-        this.modelBuildingResult = modelBuildingResult;
         this.workspace = workspace;
         if (workspace != null) {
-            workspace.addProject(this, rawModel.getPomFile().lastModified());
+            workspace.addProject(this);
+            if (!version.equals(ModelUtils.getRawVersion(rawModel))) {
+                workspace.setResolvedVersion(version);
+            }
         }
     }
 
     LocalProject(Model rawModel, LocalWorkspace workspace) {
-        this.modelBuildingResult = null;
+        this(rawModel, null, workspace);
+    }
+
+    LocalProject(Model rawModel, Model effectiveModel, LocalWorkspace workspace) {
         this.rawModel = rawModel;
+        this.effectiveModel = effectiveModel;
+        this.modelBuildingResult = null;
         this.dir = rawModel.getProjectDirectory().toPath();
         this.workspace = workspace;
         this.key = ArtifactKey.ga(ModelUtils.getGroupId(rawModel), rawModel.getArtifactId());
@@ -178,13 +193,21 @@ public class LocalProject {
         version = rawVersionIsUnresolved ? ModelUtils.resolveVersion(rawVersion, rawModel) : rawVersion;
 
         if (workspace != null) {
-            workspace.addProject(this, rawModel.getPomFile().lastModified());
+            workspace.addProject(this);
             if (rawVersionIsUnresolved && version != null) {
                 workspace.setResolvedVersion(version);
             }
         } else if (version == null && rawVersionIsUnresolved) {
             throw UnresolvedVersionException.forGa(key.getGroupId(), key.getArtifactId(), rawVersion);
         }
+    }
+
+    public ModelBuildingResult getModelBuildingResult() {
+        return modelBuildingResult;
+    }
+
+    protected long getPomLastModified() {
+        return rawModel.getPomFile().lastModified();
     }
 
     public LocalProject getLocalParent() {
@@ -227,9 +250,9 @@ public class LocalProject {
     }
 
     public Path getOutputDir() {
-        return modelBuildingResult == null
+        return effectiveModel == null
                 ? resolveRelativeToBaseDir(configuredBuildDir(this, BuildBase::getDirectory), "target")
-                : Path.of(modelBuildingResult.getEffectiveModel().getBuild().getDirectory());
+                : Path.of(effectiveModel.getBuild().getDirectory());
     }
 
     public Path getCodeGenOutputDir() {
@@ -241,21 +264,21 @@ public class LocalProject {
     }
 
     public Path getClassesDir() {
-        return modelBuildingResult == null
+        return effectiveModel == null
                 ? resolveRelativeToBuildDir(configuredBuildDir(this, Build::getOutputDirectory), "classes")
-                : Path.of(modelBuildingResult.getEffectiveModel().getBuild().getOutputDirectory());
+                : Path.of(effectiveModel.getBuild().getOutputDirectory());
     }
 
     public Path getTestClassesDir() {
-        return modelBuildingResult == null
+        return effectiveModel == null
                 ? resolveRelativeToBuildDir(configuredBuildDir(this, Build::getTestOutputDirectory), "test-classes")
-                : Path.of(modelBuildingResult.getEffectiveModel().getBuild().getTestOutputDirectory());
+                : Path.of(effectiveModel.getBuild().getTestOutputDirectory());
     }
 
     public Path getSourcesSourcesDir() {
-        return modelBuildingResult == null
+        return effectiveModel == null
                 ? resolveRelativeToBaseDir(configuredBuildDir(this, Build::getSourceDirectory), "src/main/java")
-                : Path.of(modelBuildingResult.getEffectiveModel().getBuild().getSourceDirectory());
+                : Path.of(effectiveModel.getBuild().getSourceDirectory());
     }
 
     public Path getTestSourcesSourcesDir() {
@@ -290,12 +313,12 @@ public class LocalProject {
                 .collect(Collectors.toCollection(LinkedHashSet::new)));
     }
 
-    public ModelBuildingResult getModelBuildingResult() {
-        return modelBuildingResult;
-    }
-
     public Model getRawModel() {
         return rawModel;
+    }
+
+    public Model getEffectiveModel() {
+        return effectiveModel;
     }
 
     public LocalWorkspace getWorkspace() {
@@ -307,7 +330,7 @@ public class LocalProject {
     }
 
     public String getPackaging() {
-        return modelBuildingResult == null ? rawModel.getPackaging() : modelBuildingResult.getEffectiveModel().getPackaging();
+        return effectiveModel == null ? rawModel.getPackaging() : effectiveModel.getPackaging();
     }
 
     public ResolvedDependency getAppArtifact() {
@@ -324,16 +347,62 @@ public class LocalProject {
         return resolveRelativeToBaseDir(path, null);
     }
 
-    Path resolveRelativeToBaseDir(String path, String defaultPath) {
-        return dir.resolve(path == null ? defaultPath : stripProjectBasedirPrefix(path, PROJECT_BASEDIR));
+    Path resolveRelativeToBaseDir(String pathStr, String defaultPath) {
+        if (pathStr == null) {
+            return dir.resolve(defaultPath);
+        }
+        var path = resolveProjectPropertyPathOrNull(pathStr);
+        return path == null ? dir.resolve(pathStr) : path;
     }
 
-    private Path resolveRelativeToBuildDir(String path, String defaultPath) {
-        return getOutputDir().resolve(path == null ? defaultPath : stripProjectBasedirPrefix(path, PROJECT_BUILD_DIR));
+    private Path resolveRelativeToBuildDir(String pathStr, String defaultPath) {
+        if (pathStr == null) {
+            return getOutputDir().resolve(defaultPath);
+        }
+        var path = resolveProjectPropertyPathOrNull(pathStr);
+        return path == null ? getOutputDir().resolve(pathStr) : path;
     }
 
-    static String stripProjectBasedirPrefix(String path, String expr) {
-        return path.startsWith(expr) ? path.substring(expr.length() + 1) : path;
+    private Path resolveRelativeToDir(Path baseDir, String pathStr) {
+        if (pathStr == null) {
+            return baseDir;
+        }
+        var path = resolveProjectPropertyPathOrNull(pathStr);
+        return path == null ? baseDir.resolve(pathStr) : path;
+    }
+
+    Path resolveProjectPropertyPathOrNull(String pathStr) {
+        final int propertyStart = getProjectPropertySuffixIndex(pathStr);
+        if (propertyStart >= 0) {
+            String relativePath = getRelativePath(pathStr, propertyStart, "basedir}");
+            if (relativePath != null) {
+                return relativePath.isEmpty() ? dir : dir.resolve(relativePath);
+            }
+            relativePath = getRelativePath(pathStr, propertyStart, "build.directory}");
+            if (relativePath != null) {
+                return relativePath.isEmpty() ? getOutputDir() : getOutputDir().resolve(relativePath);
+            }
+            relativePath = getRelativePath(pathStr, propertyStart, "build.outputDirectory}");
+            if (relativePath != null) {
+                return relativePath.isEmpty() ? getClassesDir() : getClassesDir().resolve(relativePath);
+            }
+        }
+        return null;
+    }
+
+    private static String getRelativePath(String pathStr, int elementStart, String pathElement) {
+        if (!pathStr.regionMatches(elementStart, pathElement, 0, pathElement.length())) {
+            return null;
+        }
+        return pathStr.length() == elementStart + pathElement.length() ? ""
+                : pathStr.substring(elementStart + pathElement.length() + 1);
+    }
+
+    private static int getProjectPropertySuffixIndex(String pathStr) {
+        final String projectProdPrefix = "${project.";
+        // we are not using startWith here because, apparently, there could be preceding '/' characters, although it doesn't seem to make sense
+        final int propertyStart = pathStr.indexOf(projectProdPrefix);
+        return propertyStart < 0 ? propertyStart : propertyStart + projectProdPrefix.length();
     }
 
     private static String configuredBuildDir(LocalProject project, Function<Build, String> f) {
@@ -365,72 +434,20 @@ public class LocalProject {
                 .setBuildFile(getRawModel().getPomFile().toPath())
                 .setBuildDir(getOutputDir());
 
-        final Model model = modelBuildingResult == null ? getRawModel() : modelBuildingResult.getEffectiveModel();
-        if (!ArtifactCoords.TYPE_POM.equals(model.getPackaging())) {
-            final Build build = model.getBuild();
-            boolean addDefaultSourceSet = true;
-            if (build != null && !build.getPlugins().isEmpty()) {
-                for (Plugin plugin : build.getPlugins()) {
-                    if (plugin.getArtifactId().equals("maven-jar-plugin")) {
-                        if (plugin.getExecutions().isEmpty()) {
-                            final DefaultArtifactSources src = processJarPluginExecutionConfig(plugin.getConfiguration(),
-                                    false);
-                            if (src != null) {
-                                addDefaultSourceSet = false;
-                                moduleBuilder.addArtifactSources(src);
-                            }
-                        } else {
-                            for (PluginExecution e : plugin.getExecutions()) {
-                                DefaultArtifactSources src = null;
-                                if (e.getGoals().contains(ArtifactCoords.TYPE_JAR)) {
-                                    src = processJarPluginExecutionConfig(e.getConfiguration(), false);
-                                    addDefaultSourceSet &= !(src != null && e.getId().equals("default-jar"));
-                                } else if (e.getGoals().contains("test-jar")) {
-                                    src = processJarPluginExecutionConfig(e.getConfiguration(), true);
-                                }
-                                if (src != null) {
-                                    moduleBuilder.addArtifactSources(src);
-                                }
-                            }
-                        }
-                    } else if (plugin.getArtifactId().equals("maven-surefire-plugin") && plugin.getConfiguration() != null) {
-                        Object config = plugin.getConfiguration();
-                        if (!(config instanceof Xpp3Dom)) {
-                            continue;
-                        }
-                        Xpp3Dom dom = (Xpp3Dom) config;
-                        final Xpp3Dom depExcludes = dom.getChild("classpathDependencyExcludes");
-                        if (depExcludes != null) {
-                            final Xpp3Dom[] excludes = depExcludes.getChildren("classpathDependencyExclude");
-                            if (excludes != null) {
-                                final List<String> list = new ArrayList<>(excludes.length);
-                                for (Xpp3Dom exclude : excludes) {
-                                    list.add(exclude.getValue());
-                                }
-                                moduleBuilder.setTestClasspathDependencyExclusions(list);
-                            }
-                        }
-                        final Xpp3Dom additionalElements = dom.getChild("additionalClasspathElements");
-                        if (additionalElements != null) {
-                            final Xpp3Dom[] elements = additionalElements.getChildren("additionalClasspathElement");
-                            if (elements != null) {
-                                final List<String> list = new ArrayList<>(elements.length);
-                                for (Xpp3Dom element : elements) {
-                                    for (String s : element.getValue().split(",")) {
-                                        list.add(stripProjectBasedirPrefix(s, PROJECT_BASEDIR));
-                                    }
-                                }
-                                moduleBuilder.setAdditionalTestClasspathElements(list);
-                            }
-                        }
-                    }
-                }
-            }
-
+        final Model model = effectiveModel == null ? rawModel : effectiveModel;
+        if (!ArtifactCoords.TYPE_POM.equals(getPackaging())) {
+            final List<Plugin> plugins = model.getBuild() == null ? List.of() : model.getBuild().getPlugins();
+            boolean addDefaultSourceSet = addSourceSetsFromPlugins(plugins, moduleBuilder);
             if (addDefaultSourceSet) {
-                moduleBuilder.addArtifactSources(new DefaultArtifactSources(ArtifactSources.MAIN,
-                        List.of(new DefaultSourceDir(getSourcesSourcesDir(), getClassesDir(), getGeneratedSourcesDir())),
-                        collectMainResources(null)));
+                var pluginManagement = model.getBuild() == null ? null : model.getBuild().getPluginManagement();
+                if (pluginManagement != null) {
+                    addDefaultSourceSet = addSourceSetsFromPlugins(pluginManagement.getPlugins(), moduleBuilder);
+                }
+                if (addDefaultSourceSet) {
+                    moduleBuilder.addArtifactSources(new DefaultArtifactSources(ArtifactSources.MAIN,
+                            List.of(new DefaultSourceDir(getSourcesSourcesDir(), getClassesDir(), getGeneratedSourcesDir())),
+                            collectMainResources(null)));
+                }
             }
             if (!moduleBuilder.hasTestSources()) {
                 // FIXME: do tests have generated sources?
@@ -452,6 +469,70 @@ public class LocalProject {
         moduleBuilder.setDependencies(toArtifactDependencies(model.getDependencies(), ctx));
 
         return this.module = moduleBuilder.build();
+    }
+
+    private boolean addSourceSetsFromPlugins(List<Plugin> plugins, WorkspaceModule.Mutable moduleBuilder) {
+        boolean addDefaultSourceSet = true;
+        int processedPlugins = 0;
+        for (int i = 0; i < plugins.size() && processedPlugins < 2; ++i) {
+            var plugin = plugins.get(i);
+            if (plugin.getArtifactId().equals("maven-jar-plugin")) {
+                ++processedPlugins;
+                if (plugin.getExecutions().isEmpty()) {
+                    final DefaultArtifactSources src = processJarPluginExecutionConfig(plugin.getConfiguration(),
+                            false);
+                    if (src != null) {
+                        addDefaultSourceSet = false;
+                        moduleBuilder.addArtifactSources(src);
+                    }
+                } else {
+                    for (PluginExecution e : plugin.getExecutions()) {
+                        DefaultArtifactSources src = null;
+                        if (e.getGoals().contains(ArtifactCoords.TYPE_JAR)) {
+                            src = processJarPluginExecutionConfig(e.getConfiguration(), false);
+                            addDefaultSourceSet &= !(src != null && e.getId().equals("default-jar"));
+                        } else if (e.getGoals().contains("test-jar")) {
+                            src = processJarPluginExecutionConfig(e.getConfiguration(), true);
+                        }
+                        if (src != null) {
+                            moduleBuilder.addArtifactSources(src);
+                        }
+                    }
+                }
+            } else if (plugin.getArtifactId().equals("maven-surefire-plugin") && plugin.getConfiguration() != null) {
+                ++processedPlugins;
+                Object config = plugin.getConfiguration();
+                if (!(config instanceof Xpp3Dom)) {
+                    continue;
+                }
+                Xpp3Dom dom = (Xpp3Dom) config;
+                final Xpp3Dom depExcludes = dom.getChild("classpathDependencyExcludes");
+                if (depExcludes != null) {
+                    final Xpp3Dom[] excludes = depExcludes.getChildren("classpathDependencyExclude");
+                    if (excludes != null) {
+                        final List<String> list = new ArrayList<>(excludes.length);
+                        for (Xpp3Dom exclude : excludes) {
+                            list.add(exclude.getValue());
+                        }
+                        moduleBuilder.setTestClasspathDependencyExclusions(list);
+                    }
+                }
+                final Xpp3Dom additionalElements = dom.getChild("additionalClasspathElements");
+                if (additionalElements != null) {
+                    final Xpp3Dom[] elements = additionalElements.getChildren("additionalClasspathElement");
+                    if (elements != null) {
+                        final List<String> list = new ArrayList<>(elements.length);
+                        for (Xpp3Dom element : elements) {
+                            for (String s : element.getValue().split(",")) {
+                                list.add(resolveRelativeToBaseDir(s).toString());
+                            }
+                        }
+                        moduleBuilder.setAdditionalTestClasspathElements(list);
+                    }
+                }
+            }
+        }
+        return addDefaultSourceSet;
     }
 
     private List<io.quarkus.maven.dependency.Dependency> toArtifactDependencies(List<Dependency> rawModelDeps,
@@ -509,7 +590,7 @@ public class LocalProject {
                 new DefaultSourceDir(new DirectoryPathTree(test ? getTestSourcesSourcesDir() : getSourcesSourcesDir()),
                         new DirectoryPathTree(test ? getTestClassesDir() : getClassesDir(), filter),
                         // FIXME: wrong for tests
-                        new DirectoryPathTree(test ? getGeneratedSourcesDir() : getGeneratedSourcesDir(), filter),
+                        new DirectoryPathTree(getGeneratedSourcesDir(), filter),
                         Map.of()));
         final Collection<SourceDir> resources = test ? collectTestResources(filter) : collectMainResources(filter);
         return new DefaultArtifactSources(classifier, sources, resources);
@@ -533,8 +614,9 @@ public class LocalProject {
     }
 
     private Collection<SourceDir> collectMainResources(PathFilter filter) {
-        final List<Resource> resources = rawModel.getBuild() == null ? List.of()
-                : rawModel.getBuild().getResources();
+        final Model model = effectiveModel == null ? rawModel : effectiveModel;
+        final List<Resource> resources = model.getBuild() == null ? List.of()
+                : model.getBuild().getResources();
         final Path classesDir = getClassesDir();
         final Path generatedSourcesDir = getGeneratedSourcesDir();
         if (resources.isEmpty()) {
@@ -550,11 +632,10 @@ public class LocalProject {
                     new DefaultSourceDir(
                             new DirectoryPathTree(resolveRelativeToBaseDir(r.getDirectory(), SRC_MAIN_RESOURCES)),
                             new DirectoryPathTree((r.getTargetPath() == null ? classesDir
-                                    : classesDir.resolve(stripProjectBasedirPrefix(r.getTargetPath(), PROJECT_OUTPUT_DIR))),
+                                    : resolveRelativeToDir(classesDir, r.getTargetPath())),
                                     filter),
                             new DirectoryPathTree((r.getTargetPath() == null ? generatedSourcesDir
-                                    : generatedSourcesDir.resolve(
-                                            stripProjectBasedirPrefix(r.getTargetPath(), PROJECT_GENERATED_SOURCES_DIR))),
+                                    : resolveRelativeToDir(generatedSourcesDir, r.getTargetPath())),
                                     filter),
                             Map.of()));
         }
@@ -562,10 +643,10 @@ public class LocalProject {
     }
 
     private Collection<SourceDir> collectTestResources(PathFilter filter) {
-        final List<Resource> resources = rawModel.getBuild() == null ? List.of()
-                : rawModel.getBuild().getTestResources();
+        final Model model = effectiveModel == null ? rawModel : effectiveModel;
+        final List<Resource> resources = model.getBuild() == null ? List.of()
+                : model.getBuild().getTestResources();
         final Path testClassesDir = getTestClassesDir();
-        final Path generatedSourcesDir = getGeneratedSourcesDir();
         if (resources.isEmpty()) {
             return List.of(new DefaultSourceDir(
                     new DirectoryPathTree(resolveRelativeToBaseDir(null, SRC_TEST_RESOURCES)),
@@ -580,7 +661,7 @@ public class LocalProject {
                     new DefaultSourceDir(
                             new DirectoryPathTree(resolveRelativeToBaseDir(r.getDirectory(), SRC_TEST_RESOURCES)),
                             new DirectoryPathTree((r.getTargetPath() == null ? testClassesDir
-                                    : testClassesDir.resolve(stripProjectBasedirPrefix(r.getTargetPath(), PROJECT_OUTPUT_DIR))),
+                                    : resolveRelativeToDir(testClassesDir, r.getTargetPath())),
                                     filter),
                             // FIXME: do tests have generated sources?
                             null,

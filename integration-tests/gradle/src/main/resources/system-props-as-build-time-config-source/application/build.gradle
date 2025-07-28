@@ -5,8 +5,8 @@ plugins{
 
 
 
-group 'io.quarkus.test.application'
-version '1.0-SNAPSHOT'
+group = 'io.quarkus.test.application'
+version = '1.0-SNAPSHOT'
 
 
 repositories {
@@ -16,7 +16,7 @@ repositories {
 
 dependencies {
     implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
-    implementation 'io.quarkus:quarkus-resteasy-reactive'
+    implementation 'io.quarkus:quarkus-rest'
     implementation ('org.acme.extensions:example-extension')
 
     testImplementation 'io.quarkus:quarkus-junit5'

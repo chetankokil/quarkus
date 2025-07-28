@@ -12,6 +12,7 @@ import java.util.Map;
 import io.quarkus.devtools.codestarts.Codestart;
 import io.quarkus.devtools.codestarts.DataKey;
 import io.quarkus.devtools.codestarts.core.GenericCodestartCatalog;
+import io.quarkus.devtools.messagewriter.MessageWriter;
 
 public final class QuarkusExtensionCodestartCatalog extends GenericCodestartCatalog<QuarkusExtensionCodestartProjectInput> {
 
@@ -50,7 +51,8 @@ public final class QuarkusExtensionCodestartCatalog extends GenericCodestartCata
         IT_PARENT_RELATIVE_PATH("it-parent.relative-path"),
         MAVEN_QUARKUS_EXTENSION_PLUGIN("maven.quarkus-extension-plugin"),
         MAVEN_COMPILER_PLUGIN_VERSION("maven.compiler-plugin-version"),
-        HAS_DOCS_MODULE("has-docs-module");
+        HAS_DOCS_MODULE("has-docs-module"),
+        HAS_INTEGRATION_TESTS_MODULE("has-integration-tests-module");
 
         private final String key;
 
@@ -77,9 +79,9 @@ public final class QuarkusExtensionCodestartCatalog extends GenericCodestartCata
         GIT
     }
 
-    public static QuarkusExtensionCodestartCatalog fromBaseCodestartsResources()
+    public static QuarkusExtensionCodestartCatalog fromBaseCodestartsResources(MessageWriter log)
             throws IOException {
-        final Map<String, Codestart> codestarts = loadCodestartsFromResources(getCodestartResourceLoaders(),
+        final Map<String, Codestart> codestarts = loadCodestartsFromResources(getCodestartResourceLoaders(log),
                 QUARKUS_EXTENSION_CODESTARTS_DIR);
         return new QuarkusExtensionCodestartCatalog(codestarts.values());
     }

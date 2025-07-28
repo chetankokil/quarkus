@@ -24,6 +24,7 @@ import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.common.serialization.IntegerDeserializer;
 import org.apache.kafka.common.serialization.IntegerSerializer;
 import org.hamcrest.CoreMatchers;
+import org.hamcrest.Matcher;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -147,17 +148,18 @@ public class KafkaStreamsTest {
     }
 
     public void testKafkaStreamsNotAliveAndNotReady() throws Exception {
+
         RestAssured.get("/q/health/ready").then()
                 .statusCode(HttpStatus.SC_SERVICE_UNAVAILABLE)
-                .body("checks[0].name", CoreMatchers.is("Kafka Streams topics health check"))
-                .body("checks[0].status", CoreMatchers.is("DOWN"))
-                .body("checks[0].data.missing_topics", CoreMatchers.is("streams-test-categories,streams-test-customers"));
+                .rootPath("checks.find { it.name ==  'Kafka Streams topics health check' }")
+                .body("status", CoreMatchers.is("DOWN"))
+                .body("data.missing_topics", topicsMatcher());
 
         RestAssured.when().get("/q/health/live").then()
                 .statusCode(HttpStatus.SC_SERVICE_UNAVAILABLE)
-                .body("checks[0].name", CoreMatchers.is("Kafka Streams state health check"))
-                .body("checks[0].status", CoreMatchers.is("DOWN"))
-                .body("checks[0].data.state", CoreMatchers.is("CREATED"));
+                .rootPath("checks.find { it.name ==  'Kafka Streams state health check' }")
+                .body("status", CoreMatchers.is("DOWN"))
+                .body("data.state", CoreMatchers.is("CREATED"));
 
         RestAssured.when().get("/q/health").then()
                 .statusCode(HttpStatus.SC_SERVICE_UNAVAILABLE);
@@ -166,18 +168,24 @@ public class KafkaStreamsTest {
     public void testKafkaStreamsAliveAndReady() throws Exception {
         RestAssured.get("/q/health/ready").then()
                 .statusCode(HttpStatus.SC_OK)
-                .body("checks[0].name", CoreMatchers.is("Kafka Streams topics health check"))
-                .body("checks[0].status", CoreMatchers.is("UP"))
-                .body("checks[0].data.available_topics", CoreMatchers.is("streams-test-categories,streams-test-customers"));
+                .rootPath("checks.find { it.name ==  'Kafka Streams topics health check' }")
+                .body("status", CoreMatchers.is("UP"))
+                .body("data.available_topics", topicsMatcher());
 
         RestAssured.when().get("/q/health/live").then()
                 .statusCode(HttpStatus.SC_OK)
-                .body("checks[0].name", CoreMatchers.is("Kafka Streams state health check"))
-                .body("checks[0].status", CoreMatchers.is("UP"))
-                .body("checks[0].data.state", CoreMatchers.is("RUNNING"));
+                .rootPath("checks.find { it.name ==  'Kafka Streams state health check' }")
+                .body("status", CoreMatchers.is("UP"))
+                .body("data.state", CoreMatchers.is("RUNNING"));
 
         RestAssured.when().get("/q/health").then()
                 .statusCode(HttpStatus.SC_OK);
+    }
+
+    Matcher<String> topicsMatcher() {
+        return CoreMatchers.allOf(
+                CoreMatchers.containsString("streams-test-customers"),
+                CoreMatchers.containsString("streams-test-categories"));
     }
 
     private void produceCustomers() {

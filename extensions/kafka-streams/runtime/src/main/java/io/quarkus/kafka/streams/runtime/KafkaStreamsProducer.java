@@ -1,22 +1,17 @@
 package io.quarkus.kafka.streams.runtime;
 
+import static io.quarkus.kafka.client.runtime.KafkaRuntimeConfigProducer.TLS_CONFIG_NAME_KEY;
 import static io.quarkus.kafka.streams.runtime.KafkaStreamsRuntimeConfig.DEFAULT_KAFKA_BROKER;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -30,7 +25,6 @@ import jakarta.inject.Singleton;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
-import org.apache.kafka.clients.admin.ListTopicsResult;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.streams.KafkaClientSupplier;
@@ -59,15 +53,12 @@ import io.smallrye.common.annotation.Identifier;
 public class KafkaStreamsProducer {
 
     private static final Logger LOGGER = Logger.getLogger(KafkaStreamsProducer.class.getName());
-    private static volatile boolean shutdown = false;
 
     private final ExecutorService executorService;
     private final StreamsConfig streamsConfig;
     private final KafkaStreams kafkaStreams;
-    private final KafkaStreamsTopologyManager kafkaStreamsTopologyManager;
+    private final KafkaStreamsTopologyManager topologyManager;
     private final Admin kafkaAdminClient;
-    private final Duration topicsTimeout;
-    private final List<String> trimmedTopics;
 
     @Inject
     public KafkaStreamsProducer(KafkaStreamsSupport kafkaStreamsSupport, KafkaStreamsRuntimeConfig runtimeConfig,
@@ -76,23 +67,20 @@ public class KafkaStreamsProducer {
             @Identifier("default-kafka-broker") Instance<Map<String, Object>> defaultConfiguration,
             Instance<StateListener> stateListener, Instance<StateRestoreListener> globalStateRestoreListener,
             Instance<StreamsUncaughtExceptionHandler> uncaughtExceptionHandlerListener) {
-        shutdown = false;
         // No producer for Topology -> nothing to do
         if (topology.isUnsatisfied()) {
             LOGGER.warn("No Topology producer; Kafka Streams will not be started");
             this.executorService = null;
             this.streamsConfig = null;
             this.kafkaStreams = null;
-            this.kafkaStreamsTopologyManager = null;
+            this.topologyManager = null;
             this.kafkaAdminClient = null;
-            this.topicsTimeout = null;
-            this.trimmedTopics = null;
             return;
         }
 
         Properties buildTimeProperties = kafkaStreamsSupport.getProperties();
 
-        String bootstrapServersConfig = asString(runtimeConfig.bootstrapServers);
+        String bootstrapServersConfig = asString(runtimeConfig.bootstrapServers());
         if (DEFAULT_KAFKA_BROKER.equalsIgnoreCase(bootstrapServersConfig)) {
             // Try to see if kafka.bootstrap.servers is set, if so, use that value, if not, keep localhost:9092
             bootstrapServersConfig = ConfigProvider.getConfig().getOptionalValue("kafka.bootstrap.servers", String.class)
@@ -107,28 +95,23 @@ public class KafkaStreamsProducer {
         this.kafkaAdminClient = Admin.create(getAdminClientConfig(kafkaStreamsProperties));
 
         this.executorService = executorService;
-
-        this.topicsTimeout = runtimeConfig.topicsTimeout;
-        this.trimmedTopics = runtimeConfig.getTrimmedTopics();
         this.streamsConfig = new StreamsConfig(kafkaStreamsProperties);
         this.kafkaStreams = initializeKafkaStreams(streamsConfig, topology.get(),
                 kafkaClientSupplier, stateListener, globalStateRestoreListener, uncaughtExceptionHandlerListener);
-        this.kafkaStreamsTopologyManager = new KafkaStreamsTopologyManager(kafkaAdminClient);
+        this.topologyManager = new KafkaStreamsTopologyManager(kafkaAdminClient, topology.get(), runtimeConfig);
     }
 
     public void onStartup(@Observes StartupEvent event, Event<KafkaStreams> kafkaStreamsEvent) {
         if (kafkaStreams != null) {
             kafkaStreamsEvent.fire(kafkaStreams);
             executorService.execute(() -> {
-                if (topicsTimeout.compareTo(Duration.ZERO) > 0) {
-                    try {
-                        waitForTopicsToBeCreated(kafkaAdminClient, trimmedTopics, topicsTimeout);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
+                try {
+                    topologyManager.waitForTopicsToBeCreated();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
-                if (!shutdown) {
+                if (!topologyManager.isClosed()) {
                     LOGGER.debug("Starting Kafka Streams pipeline");
                     kafkaStreams.start();
                 }
@@ -154,13 +137,12 @@ public class KafkaStreamsProducer {
     @Singleton
     @Unremovable
     public KafkaStreamsTopologyManager kafkaStreamsTopologyManager() {
-        return kafkaStreamsTopologyManager;
+        return topologyManager;
     }
 
     void onStop(@Observes ShutdownEvent event) {
-        shutdown = true;
-        if (executorService != null) {
-            executorService.shutdown();
+        if (topologyManager != null) {
+            topologyManager.close();
         }
         if (kafkaStreams != null) {
             LOGGER.debug("Stopping Kafka Streams pipeline");
@@ -215,66 +197,68 @@ public class KafkaStreamsProducer {
 
         // add runtime options
         streamsProperties.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServersConfig);
-        streamsProperties.put(StreamsConfig.APPLICATION_ID_CONFIG, runtimeConfig.applicationId);
+        streamsProperties.put(StreamsConfig.APPLICATION_ID_CONFIG, runtimeConfig.applicationId());
 
         // app id
-        if (runtimeConfig.applicationServer.isPresent()) {
-            streamsProperties.put(StreamsConfig.APPLICATION_SERVER_CONFIG, runtimeConfig.applicationServer.get());
+        if (runtimeConfig.applicationServer().isPresent()) {
+            streamsProperties.put(StreamsConfig.APPLICATION_SERVER_CONFIG, runtimeConfig.applicationServer().get());
         }
 
         // schema registry
-        if (runtimeConfig.schemaRegistryUrl.isPresent()) {
-            streamsProperties.put(runtimeConfig.schemaRegistryKey, runtimeConfig.schemaRegistryUrl.get());
+        if (runtimeConfig.schemaRegistryUrl().isPresent()) {
+            streamsProperties.put(runtimeConfig.schemaRegistryKey(), runtimeConfig.schemaRegistryUrl().get());
         }
 
         // set the security protocol (in case we are doing PLAIN_TEXT)
-        setProperty(runtimeConfig.securityProtocol, streamsProperties, CommonClientConfigs.SECURITY_PROTOCOL_CONFIG);
+        setProperty(runtimeConfig.securityProtocol(), streamsProperties, CommonClientConfigs.SECURITY_PROTOCOL_CONFIG);
 
         // sasl
-        SaslConfig sc = runtimeConfig.sasl;
+        SaslConfig sc = runtimeConfig.sasl();
         if (sc != null) {
-            setProperty(sc.mechanism, streamsProperties, SaslConfigs.SASL_MECHANISM);
+            setProperty(sc.mechanism(), streamsProperties, SaslConfigs.SASL_MECHANISM);
 
-            setProperty(sc.jaasConfig, streamsProperties, SaslConfigs.SASL_JAAS_CONFIG);
+            setProperty(sc.jaasConfig(), streamsProperties, SaslConfigs.SASL_JAAS_CONFIG);
 
-            setProperty(sc.clientCallbackHandlerClass, streamsProperties, SaslConfigs.SASL_CLIENT_CALLBACK_HANDLER_CLASS);
+            setProperty(sc.clientCallbackHandlerClass(), streamsProperties, SaslConfigs.SASL_CLIENT_CALLBACK_HANDLER_CLASS);
 
-            setProperty(sc.loginCallbackHandlerClass, streamsProperties, SaslConfigs.SASL_LOGIN_CALLBACK_HANDLER_CLASS);
-            setProperty(sc.loginClass, streamsProperties, SaslConfigs.SASL_LOGIN_CLASS);
+            setProperty(sc.loginCallbackHandlerClass(), streamsProperties, SaslConfigs.SASL_LOGIN_CALLBACK_HANDLER_CLASS);
+            setProperty(sc.loginClass(), streamsProperties, SaslConfigs.SASL_LOGIN_CLASS);
 
-            setProperty(sc.kerberosServiceName, streamsProperties, SaslConfigs.SASL_KERBEROS_SERVICE_NAME);
-            setProperty(sc.kerberosKinitCmd, streamsProperties, SaslConfigs.SASL_KERBEROS_KINIT_CMD);
-            setProperty(sc.kerberosTicketRenewWindowFactor, streamsProperties,
+            setProperty(sc.kerberosServiceName(), streamsProperties, SaslConfigs.SASL_KERBEROS_SERVICE_NAME);
+            setProperty(sc.kerberosKinitCmd(), streamsProperties, SaslConfigs.SASL_KERBEROS_KINIT_CMD);
+            setProperty(sc.kerberosTicketRenewWindowFactor(), streamsProperties,
                     SaslConfigs.SASL_KERBEROS_TICKET_RENEW_WINDOW_FACTOR);
-            setProperty(sc.kerberosTicketRenewJitter, streamsProperties, SaslConfigs.SASL_KERBEROS_TICKET_RENEW_JITTER);
-            setProperty(sc.kerberosMinTimeBeforeRelogin, streamsProperties, SaslConfigs.SASL_KERBEROS_MIN_TIME_BEFORE_RELOGIN);
+            setProperty(sc.kerberosTicketRenewJitter(), streamsProperties, SaslConfigs.SASL_KERBEROS_TICKET_RENEW_JITTER);
+            setProperty(sc.kerberosMinTimeBeforeRelogin(), streamsProperties,
+                    SaslConfigs.SASL_KERBEROS_MIN_TIME_BEFORE_RELOGIN);
 
-            setProperty(sc.loginRefreshWindowFactor, streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_FACTOR);
-            setProperty(sc.loginRefreshWindowJitter, streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_JITTER);
+            setProperty(sc.loginRefreshWindowFactor(), streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_FACTOR);
+            setProperty(sc.loginRefreshWindowJitter(), streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_WINDOW_JITTER);
 
-            setProperty(sc.loginRefreshMinPeriod, streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS,
+            setProperty(sc.loginRefreshMinPeriod(), streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_MIN_PERIOD_SECONDS,
                     DurationToSecondsFunction.INSTANCE);
-            setProperty(sc.loginRefreshBuffer, streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_BUFFER_SECONDS,
+            setProperty(sc.loginRefreshBuffer(), streamsProperties, SaslConfigs.SASL_LOGIN_REFRESH_BUFFER_SECONDS,
                     DurationToSecondsFunction.INSTANCE);
         }
 
         // ssl
-        SslConfig ssl = runtimeConfig.ssl;
+        SslConfig ssl = runtimeConfig.ssl();
         if (ssl != null) {
-            setProperty(ssl.protocol, streamsProperties, SslConfigs.SSL_PROTOCOL_CONFIG);
-            setProperty(ssl.provider, streamsProperties, SslConfigs.SSL_PROVIDER_CONFIG);
-            setProperty(ssl.cipherSuites, streamsProperties, SslConfigs.SSL_CIPHER_SUITES_CONFIG);
-            setProperty(ssl.enabledProtocols, streamsProperties, SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG);
+            setProperty(ssl.protocol(), streamsProperties, SslConfigs.SSL_PROTOCOL_CONFIG);
+            setProperty(ssl.provider(), streamsProperties, SslConfigs.SSL_PROVIDER_CONFIG);
+            setProperty(ssl.cipherSuites(), streamsProperties, SslConfigs.SSL_CIPHER_SUITES_CONFIG);
+            setProperty(ssl.enabledProtocols(), streamsProperties, SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG);
 
-            setTrustStoreConfig(ssl.truststore, streamsProperties);
-            setKeyStoreConfig(ssl.keystore, streamsProperties);
-            setKeyConfig(ssl.key, streamsProperties);
+            setTrustStoreConfig(ssl.truststore(), streamsProperties);
+            setKeyStoreConfig(ssl.keystore(), streamsProperties);
+            setKeyConfig(ssl.key(), streamsProperties);
 
-            setProperty(ssl.keymanagerAlgorithm, streamsProperties, SslConfigs.SSL_KEYMANAGER_ALGORITHM_CONFIG);
-            setProperty(ssl.trustmanagerAlgorithm, streamsProperties, SslConfigs.SSL_TRUSTMANAGER_ALGORITHM_CONFIG);
-            Optional<String> eia = Optional.of(ssl.endpointIdentificationAlgorithm.orElse(""));
+            setProperty(ssl.keymanagerAlgorithm(), streamsProperties, SslConfigs.SSL_KEYMANAGER_ALGORITHM_CONFIG);
+            setProperty(ssl.trustmanagerAlgorithm(), streamsProperties, SslConfigs.SSL_TRUSTMANAGER_ALGORITHM_CONFIG);
+            Optional<String> eia = Optional.of(ssl.endpointIdentificationAlgorithm().orElse(""));
             setProperty(eia, streamsProperties, SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG);
-            setProperty(ssl.secureRandomImplementation, streamsProperties, SslConfigs.SSL_SECURE_RANDOM_IMPLEMENTATION_CONFIG);
+            setProperty(ssl.secureRandomImplementation(), streamsProperties,
+                    SslConfigs.SSL_SECURE_RANDOM_IMPLEMENTATION_CONFIG);
         }
 
         return streamsProperties;
@@ -282,26 +266,26 @@ public class KafkaStreamsProducer {
 
     private static void setTrustStoreConfig(TrustStoreConfig tsc, Properties properties) {
         if (tsc != null) {
-            setProperty(tsc.type, properties, SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG);
-            setProperty(tsc.location, properties, SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG);
-            setProperty(tsc.password, properties, SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG);
-            setProperty(tsc.certificates, properties, SslConfigs.SSL_TRUSTSTORE_CERTIFICATES_CONFIG);
+            setProperty(tsc.type(), properties, SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG);
+            setProperty(tsc.location(), properties, SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG);
+            setProperty(tsc.password(), properties, SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG);
+            setProperty(tsc.certificates(), properties, SslConfigs.SSL_TRUSTSTORE_CERTIFICATES_CONFIG);
         }
     }
 
     private static void setKeyStoreConfig(KeyStoreConfig ksc, Properties properties) {
         if (ksc != null) {
-            setProperty(ksc.type, properties, SslConfigs.SSL_KEYSTORE_TYPE_CONFIG);
-            setProperty(ksc.location, properties, SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
-            setProperty(ksc.password, properties, SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
-            setProperty(ksc.key, properties, SslConfigs.SSL_KEYSTORE_KEY_CONFIG);
-            setProperty(ksc.certificateChain, properties, SslConfigs.SSL_KEYSTORE_CERTIFICATE_CHAIN_CONFIG);
+            setProperty(ksc.type(), properties, SslConfigs.SSL_KEYSTORE_TYPE_CONFIG);
+            setProperty(ksc.location(), properties, SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
+            setProperty(ksc.password(), properties, SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
+            setProperty(ksc.key(), properties, SslConfigs.SSL_KEYSTORE_KEY_CONFIG);
+            setProperty(ksc.certificateChain(), properties, SslConfigs.SSL_KEYSTORE_CERTIFICATE_CHAIN_CONFIG);
         }
     }
 
     private static void setKeyConfig(KeyConfig kc, Properties properties) {
         if (kc != null) {
-            setProperty(kc.password, properties, SslConfigs.SSL_KEY_PASSWORD_CONFIG);
+            setProperty(kc.password(), properties, SslConfigs.SSL_KEY_PASSWORD_CONFIG);
         }
     }
 
@@ -325,39 +309,12 @@ public class KafkaStreamsProducer {
         return inetSocketAddress.getHostString() + ":" + inetSocketAddress.getPort();
     }
 
-    private static void waitForTopicsToBeCreated(Admin adminClient, Collection<String> topicsToAwait, Duration timeout)
-            throws InterruptedException {
-        Set<String> lastMissingTopics = null;
-        while (!shutdown) {
-            try {
-                ListTopicsResult topics = adminClient.listTopics();
-                Set<String> existingTopics = topics.names().get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-
-                if (existingTopics.containsAll(topicsToAwait)) {
-                    LOGGER.debug("All expected topics created: " + topicsToAwait);
-                    return;
-                } else {
-                    Set<String> missingTopics = new HashSet<>(topicsToAwait);
-                    missingTopics.removeAll(existingTopics);
-
-                    // Do not spam warnings - topics may take time to be created by an operator like Strimzi
-                    if (missingTopics.equals(lastMissingTopics)) {
-                        LOGGER.debug("Waiting for topic(s) to be created: " + missingTopics);
-                    } else {
-                        LOGGER.warn("Waiting for topic(s) to be created: " + missingTopics);
-                        lastMissingTopics = missingTopics;
-                    }
-                }
-            } catch (ExecutionException | TimeoutException e) {
-                LOGGER.error("Failed to get topic names from broker", e);
-            } finally {
-                Thread.sleep(1_000);
-            }
-        }
-    }
-
     private static Properties getAdminClientConfig(Properties properties) {
         Properties adminClientConfig = new Properties(properties);
+        // include TLS config name if it has been configured
+        if (properties.containsKey(TLS_CONFIG_NAME_KEY)) {
+            adminClientConfig.put(TLS_CONFIG_NAME_KEY, properties.get(TLS_CONFIG_NAME_KEY));
+        }
         // include other AdminClientConfig(s) that have been configured
         for (final String knownAdminClientConfig : AdminClientConfig.configNames()) {
             // give preference to admin.<propname> first

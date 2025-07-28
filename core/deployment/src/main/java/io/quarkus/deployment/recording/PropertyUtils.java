@@ -6,10 +6,10 @@ import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -43,7 +43,7 @@ final class PropertyUtils {
                     if (existingGetter == null || existingGetter.getReturnType().isAssignableFrom(i.getReturnType())) {
                         getters.put(name, i);
                     }
-                } else if (i.getName().startsWith("is") && i.getName().length() > 3 && i.getParameterCount() == 0
+                } else if (i.getName().startsWith("is") && i.getName().length() > 2 && i.getParameterCount() == 0
                         && (i.getReturnType() == boolean.class || i.getReturnType() == Boolean.class)) {
                     String name = Character.toLowerCase(i.getName().charAt(2)) + i.getName().substring(3);
                     isGetters.put(name, i);
@@ -53,7 +53,8 @@ final class PropertyUtils {
                 }
             }
 
-            Set<String> names = new HashSet<>(getters.keySet());
+            // we want to return the properties in a deterministic order
+            Set<String> names = new TreeSet<>(getters.keySet());
             names.addAll(isGetters.keySet());
             names.addAll(setters.keySet());
             for (String i : names) {

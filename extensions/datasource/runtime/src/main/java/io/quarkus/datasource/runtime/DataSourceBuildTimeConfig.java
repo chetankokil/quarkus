@@ -2,7 +2,9 @@ package io.quarkus.datasource.runtime;
 
 import java.util.Optional;
 
+import io.quarkus.runtime.annotations.ConfigDocSection;
 import io.quarkus.runtime.annotations.ConfigGroup;
+import io.quarkus.runtime.configuration.TrimmedStringConverter;
 import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 
@@ -12,8 +14,7 @@ public interface DataSourceBuildTimeConfig {
     /**
      * The kind of database we will connect to (e.g. h2, postgresql...).
      */
-    @WithConverter(DatabaseKindConverter.class)
-    Optional<String> dbKind();
+    Optional<@WithConverter(DatabaseKindConverter.class) String> dbKind();
 
     /**
      * The version of the database we will connect to (e.g. '10.0').
@@ -44,13 +45,14 @@ public interface DataSourceBuildTimeConfig {
      *
      * @asciidoclet
      */
-    Optional<String> dbVersion();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> dbVersion();
 
     /**
-     * Configuration for Dev Services.
+     * Dev Services.
      * <p>
      * Dev Services allow Quarkus to automatically start a database in dev and test mode.
      */
+    @ConfigDocSection(generated = true)
     DevServicesBuildTimeConfig devservices();
 
     /**

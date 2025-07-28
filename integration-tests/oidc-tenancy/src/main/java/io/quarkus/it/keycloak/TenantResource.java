@@ -15,6 +15,8 @@ import org.eclipse.microprofile.jwt.JsonWebToken;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.oidc.AccessTokenCredential;
+import io.quarkus.oidc.AuthorizationCodeFlow;
+import io.quarkus.oidc.BearerTokenAuthentication;
 import io.quarkus.oidc.IdToken;
 import io.quarkus.oidc.OIDCException;
 import io.quarkus.oidc.OidcSession;
@@ -105,6 +107,22 @@ public class TenantResource {
         return userNameService(tenant, false);
     }
 
+    @AuthorizationCodeFlow
+    @GET
+    @Path("code-flow-auth-mech-annotation")
+    @RolesAllowed("user")
+    public String codeFlowAuthMechSelectedExplicitly() {
+        return idToken.getName();
+    }
+
+    @BearerTokenAuthentication
+    @GET
+    @Path("bearer-auth-mech-annotation")
+    @RolesAllowed("user")
+    public String bearerAuthMechSelectedExplicitly() {
+        return idToken.getName();
+    }
+
     @GET
     @Path("webapp")
     @RolesAllowed("user")
@@ -179,6 +197,15 @@ public class TenantResource {
                 .collect(Collectors.joining(" "));
     }
 
+    @AuthorizationCodeFlow
+    @GET
+    @Path("webapp-local-logout")
+    @RolesAllowed("user")
+    public String localLogout() {
+        oidcSession.logout().await().indefinitely();
+        return securityIdentity.getPrincipal().getName();
+    }
+
     private String getNameWebAppType(String name,
             String idTokenNameClaim,
             String idTokenNameClaimNotExpected) {
@@ -225,4 +252,9 @@ public class TenantResource {
         return name;
     }
 
+    @GET
+    @Path("form-post-post-logout")
+    public String formPostPostLogout(@QueryParam("username") String userName) {
+        return userName + ", you have been logged out with the form post logout";
+    }
 }

@@ -91,13 +91,13 @@ configuration name to its most likely dotted format. This works fine for fixed c
 names that contain dynamic segments. In this case, Quarkus is unable to determine if `DATASOURCE_NAME` should be
 converted to `datasource.name` or `datasource-name` (or any other special character separator).
 
-For this reason, such properties always require their dotted version name in another source (the value can be left
-empty) to disambiguate the Environment Variable name. It will provide additional information to perform a two-way
-conversion and match the property names together.
+For this reason, such properties always require their dotted version name in another source to disambiguate the
+Environment Variable name. It will provide additional information to perform a two-way conversion and match the
+property names together.
 
 [source,properties]
 ----
-# value can be left empty
+# value can be left empty but must be supplied by another source at runtime (or be an optional)
 quarkus.datasource."datasource-name".jdbc.url=
 ----
 
@@ -256,7 +256,7 @@ converted default value. However, when the property is explicitly empty, the def
 [source,properties]
 ----
 # missing value, optional property
-greeting.name =
+greeting.name=
 ----
 
 In this case, since `greeting.name` was configured to be `Optional*` up above, the corresponding property value will
@@ -268,7 +268,7 @@ On the other hand, this example:
 [source,properties]
 ----
 # missing value, non-optional
-greeting.suffix =
+greeting.suffix=
 ----
 
 will result in a `java.util.NoSuchElementException: SRCFG02004: Required property greeting.message not found` on
@@ -341,6 +341,7 @@ With the `dev` profile enabled, the property `bar` has the value `hallo`, but th
 `bonjour`. If the `prod` profile is enabled, `bar` has the value `hello` (as there is no specific value for the `prod`
 profile), and `baz` the value `bonjour`.
 
+[[default-profiles]]
 === Default Profiles
 
 By default, Quarkus provides three profiles, that activate automatically in certain conditions:
@@ -369,7 +370,7 @@ Setting `quarkus.profile`  to `staging` will activate the `staging` profile.
 The `io.smallrye.config.SmallRyeConfig#getProfiles` API provides a way to retrieve the active profiles programmatically.
 ====
 
-=== Profile aware files
+=== Profile-aware files
 
 In this case, properties for a specific profile may reside in an `application-{profile}.properties` named file. The previous
 example may be expressed as:
@@ -390,19 +391,22 @@ quarkus.http.test-port=9191
 
 [NOTE]
 ====
-In this style, the configuration names in the profile aware file do not need to be prefixed with the profile name.
+In this style, the configuration names in the profile-aware file do not need to be prefixed with the profile name.
 
-Properties in the profile aware file have priority over profile aware properties defined in the main file.
+Properties in the profile-aware file have priority over profile-aware properties defined in the main file.
 ====
 
 [WARNING]
 ====
-Do not use profile aware files to set `quarkus.profile` or `quarkus.test.profile`. This will not work because the
-profile is required in advance to load the profile aware files.
+Do not use profile-aware files to set `quarkus.profile` or `quarkus.test.profile`. This will not work because the
+profile is required in advance to load the profile-aware files.
+====
 
-A profile aware file is only loaded if the unprofiled `application.properties` is also available in the same location
-and the file extension matches between the files. This is required to keep a consistent loading order and pair all the
-resources together.
+[IMPORTANT]
+====
+An `application.properties` file must exist (even if empty) in the exact location of the profile-aware
+(`application-{profile}.properties`) file to be included in the configuration to ensure a consistent order when
+loading the files.
 ====
 
 === Parent Profile
@@ -434,8 +438,8 @@ Then
 
 [WARNING]
 ====
-Do not use Profile aware files to set `quarkus.config.profile.parent`. This will not work because the profile is
-required in advance to load the profile aware files.
+Do not use Profile-aware files to set `quarkus.config.profile.parent`. This will not work because the profile is
+required in advance to load the profile-aware files.
 ====
 
 === Multiple Profiles
@@ -699,7 +703,7 @@ Setting `quarkus.config-tracking.enabled` to `true` will enable a configuration 
 
 The `prod` part of the `quarkus-prod-config-dump` file name refers to the Quarkus build mode, indicating that the dump was taken for the production build.
 
-The reason `${project.basedir}/.quarkus` directory was chosen as the default location was to make it easy to track build time configuration changes between builds and use that as an indicator to build output caching tools (such as https://maven.apache.org/extensions/maven-build-cache-extension/[Apache Maven Build Cache] and https://gradle.com/gradle-enterprise-solutions/build-cache/[Gradle Enterprise Build Cache]) whether the application binary has to be re-built.
+The reason `${project.basedir}/.quarkus` directory was chosen as the default location was to make it easy to track build time configuration changes between builds and use that as an indicator to build output caching tools (such as https://maven.apache.org/extensions/maven-build-cache-extension/[Apache Maven Build Cache] and https://gradle.com/gradle-enterprise-solutions/build-cache/[Develocity Build Cache]) whether the application binary has to be re-built.
 
 ==== Filtering configuration options
 
@@ -743,8 +747,9 @@ It will log the changed options and save the current values of each of the optio
 
 ==== Dump Quarkus application dependencies
 
-In addition to dumping configuration values, `track-config-changes` goal also dumps all the Quarkus application dependencies, including Quarkus build time dependencies, along with their checksums (Adler32). This file could be used to check whether Quarkus build classpath has changed since the previous run.
-By default, the dependency checksums will be stored under `target/quarkus-prod-dependency-checksums.txt` file. A different location could be configured using plugin parameters.
+In addition to dumping configuration values, `track-config-changes` goal also dumps all the Quarkus application dependencies, including Quarkus build time dependencies.
+This file could be used to check whether Quarkus build classpath has changed since the previous run, for instance together with Develocity's ability to checksum a classpath.
+By default, the list of dependencies will be stored under `target/quarkus-prod-dependencies.txt` file. A different location could be configured using plugin parameters.
 
 ==== Dump current build configuration when the recorded configuration isn't found
 
@@ -845,4 +850,4 @@ link:https://smallrye.io/smallrye-config/Main[SmallRye Config documentation].
 
 == Configuration Reference
 
-include::{generated-dir}/config/quarkus-config-config.adoc[opts=optional, leveloffset=+1]
+include::{generated-dir}/config/quarkus-core_quarkus.config.adoc[opts=optional, leveloffset=+1]

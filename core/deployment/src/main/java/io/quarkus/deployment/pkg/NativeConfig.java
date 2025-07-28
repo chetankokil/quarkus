@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import io.quarkus.deployment.images.ContainerImages;
 import io.quarkus.deployment.util.ContainerRuntimeUtil;
 import io.quarkus.runtime.annotations.ConfigDocDefault;
 import io.quarkus.runtime.annotations.ConfigGroup;
@@ -16,18 +17,40 @@ import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithParentName;
 
+/**
+ * Native executables
+ */
 @ConfigRoot(phase = ConfigPhase.BUILD_TIME)
 @ConfigMapping(prefix = "quarkus.native")
 public interface NativeConfig {
 
-    String DEFAULT_GRAALVM_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-graalvmce-builder-image:jdk-21";
-    String DEFAULT_MANDREL_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-21";
+    /**
+     * Set to enable native-image building using GraalVM.
+     */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Set to prevent the native-image process from actually building the native image.
+     */
+    @WithDefault("false")
+    boolean sourcesOnly();
 
     /**
      * Comma-separated, additional arguments to pass to the build process.
      * If an argument includes the {@code ,} symbol, it needs to be escaped, e.g. {@code \\,}
      */
     Optional<List<String>> additionalBuildArgs();
+
+    /**
+     * Comma-separated, additional arguments to pass to the build process.
+     * The arguments are appended to those provided through {@link #additionalBuildArgs()}, as a result they may override those
+     * passed through {@link #additionalBuildArgs()}.
+     * By convention, this is meant to be set on the command-line, while {@link #additionalBuildArgs()} should be preferred for
+     * use in properties files.
+     * If an argument includes the {@code ,} symbol, it needs to be escaped, e.g. {@code \\,}
+     */
+    Optional<List<String>> additionalBuildArgsAppend();
 
     /**
      * If the HTTP url handler should be enabled, allowing you to do URL.openConnection() for HTTP URLs
@@ -75,31 +98,31 @@ public interface NativeConfig {
 
     /**
      * Defines the user language used for building the native executable.
-     * It also serves as the default Locale language for the native executable application runtime.
+     * With GraalVM versions prior to GraalVM for JDK 24 it also serves as the default Locale language for the native executable
+     * application runtime.
      * e.g. en or cs as defined by IETF BCP 47 language tags.
      * <p>
      *
      * @deprecated Use the global quarkus.default-locale.
      */
-    @WithConverter(TrimmedStringConverter.class)
     @Deprecated
-    Optional<String> userLanguage();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> userLanguage();
 
     /**
      * Defines the user country used for building the native executable.
-     * It also serves as the default Locale country for the native executable application runtime.
+     * With GraalVM versions prior to GraalVM for JDK 24 it also serves as the default Locale country for the native executable
+     * application runtime.
      * e.g. US or FR as defined by ISO 3166-1 alpha-2 codes.
      * <p>
      *
      * @deprecated Use the global quarkus.default-locale.
      */
-    @WithConverter(TrimmedStringConverter.class)
     @Deprecated
-    Optional<String> userCountry();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> userCountry();
 
     /**
      * Defines the file encoding as in {@code -Dfile.encoding=...}.
-     *
+     * <p>
      * Native image runtime uses the host's (i.e. build time) value of {@code file.encoding}
      * system property. We intentionally default this to UTF-8 to avoid platform specific
      * defaults to be picked up which can then result in inconsistent behavior in the
@@ -110,7 +133,12 @@ public interface NativeConfig {
     String fileEncoding();
 
     /**
-     * If all character sets should be added to the native image. This increases image size
+     * If all character sets should be added to the native executable.
+     * <p>
+     * Note that some extensions (e.g. the Oracle JDBC driver) also take this setting into account to enable support for all
+     * charsets at the extension level.
+     * <p>
+     * This increases image size.
      */
     @WithDefault("false")
     boolean addAllCharsets();
@@ -208,6 +236,14 @@ public interface NativeConfig {
     Optional<Boolean> pie();
 
     /**
+     * Generate instructions for a specific machine type. Defaults to {@code x86-64-v3} on AMD64 and {@code armv8-a} on AArch64.
+     * Use {@code compatibility} for best compatibility, or {@code native} for best performance if a native executable is
+     * deployed on the same machine or on a machine with the same CPU features.
+     * A list of all available machine types is available by executing {@code native-image -march=list}
+     */
+    Optional<String> march();
+
+    /**
      * If this build is done using a remote docker daemon.
      */
     @WithDefault("false")
@@ -225,7 +261,16 @@ public interface NativeConfig {
     interface BuilderImageConfig {
         /**
          * The docker image to use to do the image build. It can be one of `graalvm`, `mandrel`, or the full image path, e.g.
-         * {@code quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-21}.
+         * {@code quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-21}.
+         * <p>
+         * <strong>Note:</strong> Builder images are available using UBI 8 and UBI 9 base images, for example:
+         * <ul>
+         * <li>UBI 8: {@code quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-21} (UBI 8)</li>
+         * <li>UBI 9: {@code quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-21} (UBI 9)</li>
+         * </ul>
+         * <p>
+         * You need to be aware that if you use a builder image using UBI9 and you plan to build a container, you must
+         * ensure that the base image used in the container is also UBI9.
          */
         @WithParentName
         @WithDefault("${platform.quarkus.native.builder-image}")
@@ -250,9 +295,9 @@ public interface NativeConfig {
         default String getEffectiveImage() {
             final String builderImageName = this.image().toUpperCase();
             if (builderImageName.equals(BuilderImageProvider.GRAALVM.name())) {
-                return DEFAULT_GRAALVM_BUILDER_IMAGE;
+                return ContainerImages.UBI9_GRAALVM_BUILDER;
             } else if (builderImageName.equals(BuilderImageProvider.MANDREL.name())) {
-                return DEFAULT_MANDREL_BUILDER_IMAGE;
+                return ContainerImages.UBI9_MANDREL_BUILDER;
             } else {
                 return this.image();
             }
@@ -287,7 +332,9 @@ public interface NativeConfig {
      * <li><code>heapdump</code> for heampdump support</li>
      * <li><code>jmxclient</code> for JMX client support (experimental)</li>
      * <li><code>jmxserver</code> for JMX server support (experimental)</li>
+     * <li><code>nmt</code> for native memory tracking support</li>
      * <li><code>all</code> for all monitoring features</li>
+     * <li><code>none</code> for explicitly turning off all monitoring features</li>
      * </ul>
      */
     Optional<List<MonitoringOption>> monitoring();
@@ -317,15 +364,20 @@ public interface NativeConfig {
      * If errors should be reported at runtime. This is a more relaxed setting, however it is not recommended as it
      * means
      * your application may fail at runtime if an unsupported feature is used by accident.
+     * <p>
+     * Note that the use of this flag may result in build time failures due to {@code ClassNotFoundException}s.
+     * Reason most likely being that the Quarkus extension already optimized it away or do not actually need it.
+     * In such cases you should explicitly add the corresponding dependency providing the missing classes as a
+     * dependency to your project.
      */
     @WithDefault("false")
     boolean reportErrorsAtRuntime();
 
     /**
      * Don't build a native image if it already exists.
-     *
+     * <p>
      * This is useful if you have already built an image and you want to use Quarkus to deploy it somewhere.
-     *
+     * <p>
      * Note that this is not able to detect if the existing image is outdated, if you have modified source
      * or config and want a new image you must not use this flag.
      */
@@ -353,7 +405,7 @@ public interface NativeConfig {
          * <pre>
          * quarkus.native.resources.includes = foo/**,bar/**&#47;*.txt
          * </pre>
-         *
+         * <p>
          * the files {@code src/main/resources/foo/selected.png} and {@code bar/some.txt} will be included in the native
          * image, while {@code src/main/resources/ignored.png} will not be included.
          * <p>
@@ -433,7 +485,7 @@ public interface NativeConfig {
          * quarkus.native.resources.includes = **&#47;*.png
          * quarkus.native.resources.excludes = foo/**,**&#47;green.png
          * </pre>
-         *
+         * <p>
          * the resource {@code red.png} will be available in the native image while the resources {@code foo/green.png}
          * and {@code bar/blue.png} will not be available in the native image.
          */
@@ -462,12 +514,50 @@ public interface NativeConfig {
     boolean enableDashboardDump();
 
     /**
+     * Include a reasons entries in the generated json configuration files.
+     */
+    @WithDefault("false")
+    boolean includeReasonsInConfigFiles();
+
+    /**
      * Configure native executable compression using UPX.
      */
     Compression compression();
 
+    /**
+     * Configuration files generated by the Quarkus build, using native image agent, are informative by default.
+     * In other words, the generated configuration files are presented in the build log but are not applied.
+     * When this option is set to true, generated configuration files are applied to the native executable building process.
+     * <p>
+     * Enabling this option should be done with care, because it can make native image configuration and/or behaviour
+     * dependant on other non-obvious factors. For example, if the native image agent generated configuration was generated
+     * from running JVM unit tests, disabling test(s) can result in a different native image configuration being generated,
+     * which in turn can misconfigure the native executable or affect its behaviour in unintended ways.
+     */
+    @WithDefault("false")
+    boolean agentConfigurationApply();
+
     @ConfigGroup
     interface Compression {
+        /**
+         * Whether compression should be enabled.
+         */
+        @WithDefault("true")
+        boolean enabled();
+
+        /**
+         * Whether the compression should be executed within a container.
+         */
+        Optional<Boolean> containerBuild();
+
+        /**
+         * The image used for compression. Defaults to {@code quarkus.native.builder-image} if not
+         * set.
+         * <p>
+         * Setting this variable will automatically activate
+         */
+        Optional<String> containerImage();
+
         /**
          * The compression level in [1, 10].
          * 10 means <em>best</em>.
@@ -479,7 +569,7 @@ public interface NativeConfig {
         /**
          * Allows passing extra arguments to the UPX command line (like --brute).
          * The arguments are comma-separated.
-         *
+         * <p>
          * The exhaustive list of parameters can be found in
          * <a href="https://github.com/upx/upx/blob/devel/doc/upx.pod">https://github.com/upx/upx/blob/devel/doc/upx.pod</a>.
          */
@@ -500,7 +590,9 @@ public interface NativeConfig {
         JFR,
         JMXSERVER,
         JMXCLIENT,
-        ALL
+        NMT,
+        ALL,
+        NONE
     }
 
     enum ImagePullStrategy {

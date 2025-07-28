@@ -3,6 +3,8 @@ package io.quarkus.hibernate.orm.runtime;
 import java.util.Map;
 import java.util.Optional;
 
+import org.hibernate.FlushMode;
+
 import io.quarkus.runtime.annotations.ConfigDocDefault;
 import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigDocSection;
@@ -10,6 +12,7 @@ import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.configuration.TrimmedStringConverter;
 import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
+import io.smallrye.config.WithName;
 import io.smallrye.config.WithParentName;
 
 @ConfigGroup
@@ -20,10 +23,6 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
      *
      * See xref:hibernate-orm.adoc#persistence-unit-active[this section of the documentation].
      *
-     * If the persistence unit is not active, it won't start with the application,
-     * and accessing the corresponding EntityManagerFactory/EntityManager or SessionFactory/Session
-     * will not be possible.
-     *
      * Note that if Hibernate ORM is disabled (i.e. `quarkus.hibernate-orm.enabled` is set to `false`),
      * all persistence units are deactivated, and setting this property to `true` will fail.
      *
@@ -31,6 +30,12 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
      */
     @ConfigDocDefault("'true' if Hibernate ORM is enabled; 'false' otherwise")
     Optional<Boolean> active();
+
+    /**
+     * Schema management configuration.
+     */
+    @ConfigDocSection
+    HibernateOrmConfigPersistenceUnitSchemaManagement schemaManagement();
 
     /**
      * Database related configuration.
@@ -49,6 +54,12 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
      */
     @ConfigDocSection
     HibernateOrmConfigPersistenceUnitLog log();
+
+    /**
+     * Flush configuration.
+     */
+    @ConfigDocSection
+    HibernateOrmConfigPersistenceUnitFlush flush();
 
     /**
      * Properties that should be passed on directly to Hibernate ORM.
@@ -79,20 +90,33 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
         /**
          * Schema generation configuration.
          */
+        @Deprecated(forRemoval = true, since = "3.22")
         HibernateOrmConfigPersistenceUnitDatabaseGeneration generation();
 
         /**
          * The default catalog to use for the database objects.
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> defaultCatalog();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> defaultCatalog();
 
         /**
          * The default schema to use for the database objects.
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> defaultSchema();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> defaultSchema();
 
+        /**
+         * Whether Hibernate ORM should check on startup
+         * that the version of the database matches the version configured on the dialect
+         * (either the default version, or the one set through `quarkus.datasource.db-version`).
+         *
+         * This should be set to `false` if the database is not available on startup.
+         *
+         * @asciidoclet
+         */
+        // TODO disable the check by default when offline startup is opted in
+        //   See https://github.com/quarkusio/quarkus/issues/13522
+        @WithName("version-check.enabled")
+        @ConfigDocDefault("`true`")
+        Optional<Boolean> versionCheckEnabled();
     }
 
     @ConfigGroup
@@ -106,6 +130,41 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
     }
 
     @ConfigGroup
+    interface HibernateOrmConfigPersistenceUnitSchemaManagement {
+
+        /**
+         * Select whether the database schema is generated or not.
+         *
+         * `drop-and-create` is awesome in development mode.
+         *
+         * This defaults to 'none'.
+         *
+         * However if Dev Services is in use and no other extensions that manage the schema are present
+         * the value will be automatically overridden to 'drop-and-create'.
+         *
+         * Accepted values: `none`, `create`, `drop-and-create`, `drop`, `update`, `validate`.
+         *
+         * @asciidoclet
+         */
+        @WithConverter(TrimmedStringConverter.class)
+        @WithDefault("none")
+        String strategy();
+
+        /**
+         * If Hibernate ORM should create the schemas automatically (for databases supporting them).
+         */
+        @WithDefault("false")
+        boolean createSchemas();
+
+        /**
+         * Whether we should stop on the first error when applying the schema.
+         */
+        @WithDefault("false")
+        boolean haltOnError();
+    }
+
+    @ConfigGroup
+    @Deprecated(forRemoval = true, since = "3.22")
     interface HibernateOrmConfigPersistenceUnitDatabaseGeneration {
 
         /**
@@ -119,22 +178,20 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
          * Accepted values: `none`, `create`, `drop-and-create`, `drop`, `update`, `validate`.
          */
         @WithParentName
-        @WithDefault("none")
-        @WithConverter(TrimmedStringConverter.class)
-        String generation();
+        @Deprecated(forRemoval = true, since = "3.22")
+        Optional<@WithConverter(TrimmedStringConverter.class) String> generation();
 
         /**
          * If Hibernate ORM should create the schemas automatically (for databases supporting them).
          */
-        @WithDefault("false")
-        boolean createSchemas();
+        @Deprecated(forRemoval = true, since = "3.22")
+        Optional<Boolean> createSchemas();
 
         /**
          * Whether we should stop on the first error when applying the schema.
          */
-        @WithDefault("false")
-        boolean haltOnError();
-
+        @Deprecated(forRemoval = true, since = "3.22")
+        Optional<Boolean> haltOnError();
     }
 
     @ConfigGroup
@@ -153,14 +210,12 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
         /**
          * Filename or URL where the database create DDL file should be generated.
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> createTarget();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> createTarget();
 
         /**
          * Filename or URL where the database drop DDL file should be generated.
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> dropTarget();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> dropTarget();
 
     }
 
@@ -182,6 +237,12 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
         boolean formatSql();
 
         /**
+         * Highlight the SQL logs if SQL log is enabled
+         */
+        @WithDefault("true")
+        boolean highlightSql();
+
+        /**
          * Whether JDBC warnings should be collected and logged.
          */
         @ConfigDocDefault("depends on dialect")
@@ -192,6 +253,23 @@ public interface HibernateOrmRuntimeConfigPersistenceUnit {
          */
         Optional<Long> queriesSlowerThanMs();
 
+    }
+
+    @ConfigGroup
+    interface HibernateOrmConfigPersistenceUnitFlush {
+        /**
+         * The default flushing strategy, or when to flush entities to the database in a Hibernate session:
+         * before every query, on commit, ...
+         *
+         * This default can be overridden on a per-session basis with `Session#setHibernateFlushMode()`
+         * or on a per-query basis with the hint `HibernateHints#HINT_FLUSH_MODE`.
+         *
+         * See the javadoc of `org.hibernate.FlushMode` for details.
+         *
+         * @asciidoclet
+         */
+        @WithDefault("auto")
+        FlushMode mode();
     }
 
 }

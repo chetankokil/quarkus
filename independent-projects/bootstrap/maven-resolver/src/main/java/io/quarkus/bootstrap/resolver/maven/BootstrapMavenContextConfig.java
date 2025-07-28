@@ -6,9 +6,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Function;
+import java.util.Properties;
 
 import org.apache.maven.model.Model;
+import org.apache.maven.settings.crypto.SettingsDecrypter;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.impl.RemoteRepositoryManager;
@@ -16,10 +17,30 @@ import org.eclipse.aether.repository.RemoteRepository;
 
 import io.quarkus.bootstrap.resolver.maven.options.BootstrapMavenOptions;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalProject;
+import io.quarkus.bootstrap.resolver.maven.workspace.WorkspaceModulePom;
 
-public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?>> {
+public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<T>> {
+
+    /**
+     * Resolves the effective value of the {@code effective-model-builder} option by looking for the
+     * {@code quarkus.bootstrap.effective-model-builder} property among the system properties and,
+     * if not set, in the properties argument.
+     * <p>
+     * If the property is found, the method will return the result of {@link java.lang.Boolean#parseBoolean}.
+     * If the property is not set, the method will return false.
+     *
+     * @param props primary source of properties
+     * @return whether effective model builder should be enabled
+     */
+    public static boolean getEffectiveModelBuilderProperty(Properties props) {
+        final String value = System.getProperty(BootstrapMavenContext.EFFECTIVE_MODEL_BUILDER_PROP);
+        return value == null ? Boolean.parseBoolean(props.getProperty(BootstrapMavenContext.EFFECTIVE_MODEL_BUILDER_PROP))
+                : Boolean.parseBoolean(value);
+    }
 
     protected String localRepo;
+    protected String[] localRepoTail;
+    protected Boolean localRepoTailIgnoreAvailability;
     protected Boolean offline;
     protected LocalProject currentProject;
     protected boolean workspaceDiscovery = true;
@@ -28,6 +49,7 @@ public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?
     protected List<RemoteRepository> remoteRepos;
     protected List<RemoteRepository> remotePluginRepos;
     protected RemoteRepositoryManager remoteRepoManager;
+    protected SettingsDecrypter settingsDecrypter;
     protected String alternatePomName;
     protected File userSettings;
     protected boolean artifactTransferLogging = true;
@@ -36,7 +58,7 @@ public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?
     protected boolean preferPomsFromWorkspace;
     protected Boolean effectiveModelBuilder;
     protected Boolean wsModuleParentHierarchy;
-    protected Function<Path, Model> modelProvider;
+    protected List<WorkspaceModulePom> providedModules;
     protected List<String> excludeSisuBeanPackages;
     protected List<String> includeSisuBeanPackages;
     protected Boolean warnOnFailedWorkspaceModules;
@@ -87,6 +109,30 @@ public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?
     @SuppressWarnings("unchecked")
     public T setLocalRepository(String localRepo) {
         this.localRepo = localRepo;
+        return (T) this;
+    }
+
+    /**
+     * Local repository tail locations (comma-separated)
+     *
+     * @param localRepoTail local repository tail locations (comma-separated)
+     * @return this instance
+     */
+    @SuppressWarnings("unchecked")
+    public T setLocalRepositoryTail(String... localRepoTail) {
+        this.localRepoTail = localRepoTail;
+        return (T) this;
+    }
+
+    /**
+     * Wheter to ignore availability on local repository tail (default: true)
+     *
+     * @param localRepoTailIgnoreAvailability whether to ignore availability on local repository tail
+     * @return this instance
+     */
+    @SuppressWarnings("unchecked")
+    public T setLocalRepositoryTailIgnoreAvailability(boolean localRepoTailIgnoreAvailability) {
+        this.localRepoTailIgnoreAvailability = localRepoTailIgnoreAvailability;
         return (T) this;
     }
 
@@ -188,6 +234,18 @@ public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?
     @SuppressWarnings("unchecked")
     public T setRemoteRepositoryManager(RemoteRepositoryManager remoteRepoManager) {
         this.remoteRepoManager = remoteRepoManager;
+        return (T) this;
+    }
+
+    /**
+     * Settings decryptor
+     *
+     * @param settingsDecrypter settings decrypter
+     * @return
+     */
+    @SuppressWarnings("unchecked")
+    public T setSettingsDecrypter(SettingsDecrypter settingsDecrypter) {
+        this.settingsDecrypter = settingsDecrypter;
         return (T) this;
     }
 
@@ -308,16 +366,20 @@ public class BootstrapMavenContextConfig<T extends BootstrapMavenContextConfig<?
     }
 
     /**
-     * When workspace discovery is enabled, this method allows to set a POM
-     * provider that would return a {@link org.apache.maven.model.Model} for
-     * a given workspace module directory.
+     * When workspace discovery is enabled, this method allows providing POMs
+     * for a given workspace POM file. It doesn't have to be a complete list of modules.
      *
-     * @param modelProvider POM provider
+     * @param pomFile POM file, never nul
+     * @param rawModel raw POM model or null
+     * @param effectiveModel effective POM model or null
      * @return this instance
      */
     @SuppressWarnings("unchecked")
-    public T setProjectModelProvider(Function<Path, Model> modelProvider) {
-        this.modelProvider = modelProvider;
+    public T addProvidedModule(Path pomFile, Model rawModel, Model effectiveModel) {
+        if (providedModules == null || providedModules.isEmpty()) {
+            providedModules = new ArrayList<>();
+        }
+        providedModules.add(new WorkspaceModulePom(pomFile, rawModel, effectiveModel));
         return (T) this;
     }
 

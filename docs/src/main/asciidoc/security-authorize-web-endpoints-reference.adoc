@@ -8,7 +8,7 @@ include::_attributes.adoc[]
 :diataxis-type: reference
 :categories: security,web
 :topics: security,authorization,http,rest
-:extensions: io.quarkus:quarkus-vertx-http,io.quarkus:quarkus-resteasy-reactive,io.quarkus:quarkus-resteasy
+:extensions: io.quarkus:quarkus-vertx-http,io.quarkus:quarkus-rest,io.quarkus:quarkus-resteasy
 
 Quarkus incorporates a pluggable web security layer.
 When security is active, the system performs a permission check on all HTTP requests to determine if they should proceed.
@@ -123,9 +123,9 @@ public class CustomNamedHttpSecPolicy implements HttpSecurityPolicy {
     public Uni<CheckResult> checkPermission(RoutingContext event, Uni<SecurityIdentity> identity,
             AuthorizationRequestContext requestContext) {
         if (customRequestAuthorization(event)) {
-            return Uni.createFrom().item(CheckResult.PERMIT);
+            return CheckResult.permit();
         }
-        return Uni.createFrom().item(CheckResult.DENY);
+        return CheckResult.deny();
     }
 
     @Override
@@ -149,11 +149,50 @@ quarkus.http.auth.permission.custom1.policy=custom                              
 ----
 <1> Custom policy name must match the value returned by the `io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy.name` method.
 
+Alternatively, you can bind custom named HttpSecurityPolicy to Jakarta REST endpoints with the `@AuthorizationPolicy` security annotation.
+
+[[authorization-policy-example]]
+.Example of custom named HttpSecurityPolicy bound to a Jakarta REST endpoint
+[source,java]
+----
+import io.quarkus.vertx.http.security.AuthorizationPolicy;
+import jakarta.annotation.security.DenyAll;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+
+@DenyAll <1>
+@Path("hello")
+public class HelloResource {
+
+    @AuthorizationPolicy(name = "custom") <2>
+    @GET
+    public String hello() {
+        return "hello";
+    }
+
+}
+----
+<1> The `@AuthorizationPolicy` annotation can be used together with other standard security annotations.
+As usual, the method-level annotation has priority over class-level annotation.
+<2> Apply custom named HttpSecurityPolicy to the Jakarta REST `hello` endpoint.
+
 [TIP]
 ====
 You can also create global `HttpSecurityPolicy` invoked on every request.
 Just do not implement the `io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy.name` method and leave the policy nameless.
 ====
+
+[[policy-active-cdi-request-context]]
+=== Inject `@RequestScoped` beans into `HttpSecurityPolicy`
+
+`@RequestScoped` beans can only be injected when the xref:cdi-reference.adoc#request-context-lifecycle[CDI request context] is active.
+The context can be activated by users, for example with the `@ActivateRequestContext`, however authorization happens before Quarkus prepares some `@RequestScoped` beans.
+We recommend to let Quarkus activate and prepare CDI request context for you.
+For example, consider a situation where you want to inject a bean from the Jakarta REST context, such as the `jakarta.ws.rs.core.UriInfo` bean.
+In this case, you must apply the `HttpSecurityPolicy` to Jakarta REST endpoints. This can be achieved in one of the following ways:
+
+* Use the `@AuthorizationPolicy` security annotation.
+* Set the `quarkus.http.auth.permission.custom1.applies-to=jaxrs` configuration property.
 
 === Matching on paths and methods
 
@@ -225,7 +264,7 @@ Previous examples demonstrated matching all sub-paths when a path concludes with
 wildcard.
 
 This wildcard also applies in the middle of a path, representing a single path segment.
-It cannot be mixed with other path segment characters; thus, path separators always enclose the `$$*$$` wildcard, as seen in the `/public/`$$*$$`/about-us` path.
+It cannot be mixed with other path segment characters; thus, path separators always enclose the `$$*$$` wildcard, as seen in the `/public/$$*$$/about-us` path.
 
 When several path patterns correspond to the same request path, the system selects the longest sub-path leading to the `$$*$$` wildcard.
 In this context, every path segment character is more specific than the `$$*$$`
@@ -387,15 +426,42 @@ For more information, see link:https://quarkus.io/blog/path-resolution-in-quarku
 === Map `SecurityIdentity` roles
 
 Winning role-based policy can map the `SecurityIdentity` roles to the deployment-specific roles.
-These roles are then applicable for endpoint authorization by using the @RolesAllowed annotation.
+These roles are then applicable for endpoint authorization by using the `@RolesAllowed` annotation.
 
 [source,properties]
 ----
 quarkus.http.auth.policy.admin-policy1.roles.admin=Admin1 <1>
-quarkus.http.auth.permission.roles1.paths=/*
+quarkus.http.auth.permission.roles1.paths=/* <2>
 quarkus.http.auth.permission.roles1.policy=admin-policy1
 ----
 <1> Map the `admin` role to `Admin1` role. The `SecurityIdentity` will have both `admin` and `Admin1` roles.
+<2> The `/*` path is secured, only authenticated HTTP requests are granted access.
+
+If all that you need is to map the `SecurityIdentity` roles to the deployment-specific roles regardless of a path, you can also do this:
+
+[source,properties]
+----
+quarkus.http.auth.roles-mapping.admin=Admin1 <1> <2>
+----
+<1> Map the `admin` role to `Admin1` role. The `SecurityIdentity` will have both `admin` and `Admin1` roles.
+<2> The `/*` path is not secured. You must secure your endpoints with standard security annotations or define HTTP permissions in addition to this configuration property.
+
+If you prefer a programmatic configuration, the same mapping can be added with the `io.quarkus.vertx.http.security.HttpSecurity` CDI event:
+
+[source,java]
+----
+package org.acme.http.security;
+
+import io.quarkus.vertx.http.security.HttpSecurity;
+import jakarta.enterprise.event.Observes;
+
+public class HttpSecurityConfiguration {
+
+    void configure(@Observes HttpSecurity httpSecurity) {
+        httpSecurity.rolesMapping("admin", "Admin1");
+    }
+}
+----
 
 === Shared permission checks
 
@@ -436,9 +502,100 @@ quarkus.http.auth.policy.role-policy3.roles-allowed=admin
 quarkus.http.auth.permission.roles3.paths=/secured/admin/*
 quarkus.http.auth.permission.roles3.policy=role-policy3
 ----
-<1> Role `root` will be able to access `/secured/user/*` and `/secured/admin/*` paths.
+<1> Role `root` will be able to access `/secured/user/\*` and `/secured/admin/*` paths.
 <2> The `/secured/*` path can only be accessed by authenticated users. This way, you have secured the `/secured/all` path and so on.
 <3> Shared permissions are always applied before unshared ones, therefore a `SecurityIdentity` with the `root` role will have the `user` role as well.
+
+[[path-specific-authz-programmatic-set-up]]
+=== Set up path-specific authorization programmatically
+
+You can also configure the authorization policies presented by this guide so far programmatically.
+Consider the example mentioned earlier:
+
+[source,properties]
+----
+quarkus.http.auth.permission.permit1.paths=/public/*
+quarkus.http.auth.permission.permit1.policy=permit
+quarkus.http.auth.permission.permit1.methods=GET
+
+quarkus.http.auth.permission.deny1.paths=/forbidden
+quarkus.http.auth.permission.deny1.policy=deny
+
+quarkus.http.auth.permission.roles1.paths=/roles-secured/*,/other/*,/api/*
+quarkus.http.auth.permission.roles1.policy=role-policy1
+quarkus.http.auth.policy.role-policy1.roles-allowed=user,admin
+----
+
+The same authorization policies can be configured programmatically:
+
+[source,java]
+----
+package org.acme.http.security;
+
+import jakarta.enterprise.event.Observes;
+
+import io.quarkus.vertx.http.security.HttpSecurity;
+
+public class HttpSecurityConfiguration {
+
+    void configure(@Observes HttpSecurity httpSecurity) {
+        httpSecurity
+                .get("/public/*").permit()
+                .path("/roles-secured/*", "/other/*", "/api/*").roles("admin", "user")
+                .path("/forbidden").authorization().deny();
+    }
+
+}
+----
+
+Additionally, the `io.quarkus.vertx.http.security.HttpSecurity` CDI event can be used to configure specific authentication mechanisms and policies:
+
+[source,java]
+----
+package org.acme.http.security;
+
+import io.quarkus.vertx.http.security.HttpSecurity;
+import jakarta.enterprise.event.Observes;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+public class HttpSecurityConfiguration {
+
+    void configure(@Observes HttpSecurity httpSecurity, CustomHttpSecurityPolicy customHttpSecurityPolicy,
+                        @ConfigProperty(name = "secured-path") String securedPath) {
+
+        httpSecurity.path("/other/*").basic().policy(customHttpSecurityPolicy); <1>
+
+        httpSecurity.path("/roles-secured/*").bearer().authorization()
+                .policy(identity -> identity.hasRole("user") || "root".equals(identity.getPrincipal().getName()));  <2>
+
+        httpSecurity.path("/other/administration").authorizationCodeFlow()
+                .authorization().policy((identity, routingContext) -> {
+                    if (!identity.isAnonymous()) {
+                        String customAuthorization = routingContext.request().getHeader("Custom Authorization");
+                        return yourCustomAuthorizationCheck(customAuthorization);
+                    }
+                    return false;
+                });     <3>
+
+        httpSecurity.path(securedPath).form();  <4>
+
+        httpSecurity.path("/user-info").bearer().authorization().permissions("openid", "email", "profile"); <5>
+    }
+}
+----
+<1> Use the Basic authentication and authorize the requests with a custom `io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy`.
+<2> Use the Bearer token authentication and authorize the `SecurityIdentity` with your own policy.
+<3> Use Authorization Code Flow mechanism and write your own policy based on incoming request headers.
+<4> When Quarkus fires the `HttpSecurity` CDI event, the runtime configuration is ready.
+<5> Require that all the requests to the `/user-info` path have string permissions `openid`, `email` and `profile`.
+The same authorization can be required with the `@PermissionsAllowed(value = { "openid", "email", "profile" }, inclusive = true)` annotation instance placed on an endpoint.
+
+==== Programmatic set up references
+
+* xref:security-basic-authentication.adoc#basic-auth-programmatic-set-up[Set up Basic authentication programmatically]
+* xref:security-openid-connect-multitenancy.adoc#programmatic-startup[Programmatic OIDC start-up for multitenant application]
+* xref:security-authentication-mechanisms.adoc#form-based-auth-programmatic-set-up[Set up Form-based authentication programmatically]
+* xref:security-authentication-mechanisms.adoc#mtls-programmatic-set-up[Set up the mutual TLS client authentication programmatically]
 
 [[standard-security-annotations]]
 == Authorization using annotations
@@ -450,13 +607,15 @@ based on the common security annotations `@RolesAllowed`, `@DenyAll`, `@PermitAl
 [options="header"]
 |===
 s| Annotation type s| Description
-s| @DenyAll | Specifies that no security roles are allowed to invoke the specified methods.
-s| @PermitAll | Specifies that all security roles are allowed to invoke the specified methods.
+s| `@DenyAll` | Specifies that no security roles are allowed to invoke the specified methods.
+s| `@PermitAll` | Specifies that all security roles are allowed to invoke the specified methods.
 
 `@PermitAll` lets everybody in, even without authentication.
-s| @RolesAllowed | Specifies the list of security roles allowed to access methods in an application.
-
-As an equivalent to `@RolesAllowed("**")`, {project-name} also provides the `io.quarkus.security.Authenticated` annotation that permits any authenticated user to access the resource.
+s| `@RolesAllowed` | Specifies the list of security roles allowed to access methods in an application.
+s| `@Authenticated` | {project-name} provides the `io.quarkus.security.Authenticated` annotation that permits any authenticated user to access the resource. It's equivalent to `@RolesAllowed("**")`.
+s| `@PermissionsAllowed` | Specifies the list of permissions that are allowed to invoke the specified methods.
+s| `@AuthorizationPolicy` | Specifies named `io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy` that should authorize access to the specified Jakarta REST endpoints.
+Named HttpSecurityPolicy can be used for general authorization checks as demonstrated by <<authorization-policy-example>>.
 |===
 
 The following <<subject-example>> demonstrates an endpoint that uses both Jakarta REST and Common Security annotations to describe and secure its endpoints.
@@ -467,6 +626,8 @@ The following <<subject-example>> demonstrates an endpoint that uses both Jakart
 ----
 import java.security.Principal;
 
+import jakarta.annotation.security.DenyAll;
+import jakarta.annotation.security.PermitAll;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -486,17 +647,26 @@ public class SubjectExposingResource {
     }
 
     @GET
+    @Path("authenticated")
+    @Authenticated <3>
+    public String getSubjectAuthenticated(@Context SecurityContext sec) {
+        Principal user = sec.getUserPrincipal();
+        String name = user != null ? user.getName() : "anonymous";
+        return name;
+    }
+
+    @GET
     @Path("unsecured")
-    @PermitAll <3>
+    @PermitAll <4>
     public String getSubjectUnsecured(@Context SecurityContext sec) {
-        Principal user = sec.getUserPrincipal(); <4>
+        Principal user = sec.getUserPrincipal(); <5>
         String name = user != null ? user.getName() : "anonymous";
         return name;
     }
 
     @GET
     @Path("denied")
-    @DenyAll <5>
+    @DenyAll <6>
     public String getSubjectDenied(@Context SecurityContext sec) {
         Principal user = sec.getUserPrincipal();
         String name = user != null ? user.getName() : "anonymous";
@@ -507,9 +677,10 @@ public class SubjectExposingResource {
 <1> The `/subject/secured` endpoint requires an authenticated user with the granted "Tester" role through the use of the `@RolesAllowed("Tester")` annotation.
 <2> The endpoint obtains the user principal from the Jakarta REST `SecurityContext`.
 This returns `non-null` for a secured endpoint.
-<3> The `/subject/unsecured` endpoint allows for unauthenticated access by specifying the `@PermitAll` annotation.
-<4> The call to obtain the user principal returns `null` if the caller is unauthenticated and `non-null` if the caller is authenticated.
-<5> The `/subject/denied` endpoint declares the `@DenyAll` annotation, disallowing all direct access to it as a REST method, regardless of the user calling it.
+<3> The `/subject/authenticated` endpoint allows any authenticated user by specifying the `@Authenticated` annotation.
+<4> The `/subject/unsecured` endpoint allows for unauthenticated access by specifying the `@PermitAll` annotation.
+<5> The call to obtain the user principal returns `null` if the caller is unauthenticated and `non-null` if the caller is authenticated.
+<6> The `/subject/denied` endpoint declares the `@DenyAll` annotation, disallowing all direct access to it as a REST method, regardless of the user calling it.
 The method is still invokable internally by other methods in this class.
 
 CAUTION: If you plan to use standard security annotations on the IO thread, review the information in xref:security-proactive-authentication.adoc[Proactive Authentication].
@@ -530,7 +701,6 @@ However, if that property is not specified, a role named `User` is required as a
 |===
 
 .Example of a property expressions usage in the `@RolesAllowed` annotation
-
 [source,properties]
 ----
 admin=Administrator
@@ -541,12 +711,12 @@ tester.role=Tester
 all-roles=Administrator,Software,Tester,User
 ----
 
+[[subject-access-control-example]]
+.Subject access control example
 [source,java]
 ----
 import java.security.Principal;
 
-import jakarta.annotation.security.DenyAll;
-import jakarta.annotation.security.PermitAll;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -605,6 +775,66 @@ It is possible to use multiple expressions in the role definition.
 <4> In production, this `/subject/secured` endpoint requires an authenticated user with the `User` role.
 In development mode, it allows any authenticated user.
 <5> Property expression `all-roles` will be treated as a collection type `List`, therefore, the endpoint will be accessible for roles `Administrator`, `Software`, `Tester` and `User`.
+
+=== Endpoint security annotations and Jakarta REST inheritance
+
+Quarkus supports security annotations placed on the endpoint implementation or its class like in the example below:
+
+[source,java]
+----
+@Path("hello")
+public interface HelloInterface {
+
+    @GET
+    String hello();
+
+}
+
+@DenyAll <1>
+public class HelloInterfaceImpl implements HelloInterface {
+
+    @RolesAllowed("admin") <2>
+    @Override
+    public String hello() {
+        return "Hello";
+    }
+}
+----
+<1> Class-level security annotation must be placed on the class where the endpoint implementation is declared.
+<2> Method-level security annotation must be placed on the endpoint implementation.
+
+[IMPORTANT]
+====
+The xref:resteasy.adoc[RESTEasy] subresource locators declared as default interface methods cannot be secured
+by standard security annotations.
+Secured subresource locators must be implemented and secured on the interface implementors like in the example below:
+
+[source,java]
+----
+@Path("hello")
+public interface HelloInterface {
+
+    @RolesAllowed("admin")
+    @Path("sub")
+    default HelloSubResource wrongWay() {
+        // not supported
+    }
+
+    @Path("sub")
+    HelloSubResource rightWay();
+
+}
+
+public class HelloInterfaceImpl implements HelloInterface {
+
+    @RolesAllowed("admin")
+    @Override
+    public HelloSubResource rightWay() {
+        return new HelloSubResource();
+    }
+}
+----
+====
 
 [[permission-annotation]]
 === Permission annotation
@@ -720,7 +950,7 @@ Your custom class must define exactly one constructor that accepts the permissio
 In this scenario, the permission `list` is added to the `SecurityIdentity` instance as `new CustomPermission("list")`.
 
 You can also create a custom `java.security.Permission` class with additional constructor parameters.
-These additional parameters get matched with arguments of the method annotated with the `@PermissionsAllowed` annotation.
+These additional parameters names get matched with arguments names of the method annotated with the `@PermissionsAllowed` annotation.
 Later, Quarkus instantiates your custom permission with actual arguments, with which the method annotated with the `@PermissionsAllowed` has been invoked.
 
 .Example of a custom `java.security.Permission` class that accepts additional arguments
@@ -800,12 +1030,12 @@ import org.acme.library.LibraryPermission.Library;
 public class LibraryService {
 
     @PermissionsAllowed(value = "tv:write", permission = LibraryPermission.class) <1>
-    public Library updateLibrary(String newDesc, Library update) {
-        update.description = newDesc;
-        return update;
+    public Library updateLibrary(String newDesc, Library library) {
+        library.description = newDesc;
+        return library;
     }
 
-    @PermissionsAllowed(value = "tv:write", permission = LibraryPermission.class, params = "library") <2>
+    @PermissionsAllowed(value = "tv:write", permission = LibraryPermission.class) <2>
     @PermissionsAllowed(value = {"tv:read", "tv:list"}, permission = LibraryPermission.class)
     public Library migrateLibrary(Library migrate, Library library) {
         // migrate libraries
@@ -814,10 +1044,11 @@ public class LibraryService {
 
 }
 ----
-<1> The formal parameter `update` is identified as the first `Library` parameter and gets passed to the `LibraryPermission` class.
+<1> The formal parameter `library` is identified as the parameter matching same-named `LibraryPermission` constructor parameter.
+Therefore, Quarkus will pass the `library` parameter to the `LibraryPermission` class constructor.
 However, the `LibraryPermission` must be instantiated each time the `updateLibrary` method is invoked.
-<2> Here, the first `Library` parameter is `migrate`; therefore, the `library` parameter gets marked explicitly through `PermissionsAllowed#params`.
-The permission constructor and the annotated method must have the parameter `library` set; otherwise, validation fails.
+<2> Here, the second `Library` parameter matches the name `library`,
+while the `migrate` parameter is ignored during the `LibraryPermission` permission instantiation.
 
 .Example of a resource secured with the `LibraryPermission`
 
@@ -872,7 +1103,7 @@ public class MediaLibraryPermission extends LibraryPermission {
 
 }
 ----
-<1> When building a native executable, the permission class must be registered for reflection unless it is also used in at least one `io.quarkus.security.PermissionsAllowed#name` parameter.
+<1> When building a native executable, the permission class must be registered for reflection unless it is also used in at least one `io.quarkus.security.PermissionsAllowed#name` parameter. More details about the `@RegisterForReflection` annotation can be found on the xref:writing-native-applications-tips.adoc#registerForReflection[native application tips] page.
 <2> We want to pass the `MediaLibrary` instance to the `LibraryPermission` constructor.
 
 [source,properties]
@@ -897,7 +1128,6 @@ In the following example, xref:security-customization.adoc#security-identity-cus
 [source,java]
 ----
 import java.security.Permission;
-import java.util.function.Function;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -923,26 +1153,263 @@ public class PermissionsIdentityAugmentor implements SecurityIdentityAugmentor {
     }
 
     SecurityIdentity build(SecurityIdentity identity) {
-        Permission possessedPermission = new MediaLibraryPermission("media-library",
-                new String[] { "read", "write", "list"}); <1>
         return QuarkusSecurityIdentity.builder(identity)
-                .addPermissionChecker(new Function<Permission, Uni<Boolean>>() { <2>
-                    @Override
-                    public Uni<Boolean> apply(Permission requiredPermission) {
-                        boolean accessGranted = possessedPermission.implies(requiredPermission);
-                        return Uni.createFrom().item(accessGranted);
-                    }
-                })
+                .addPermission(new MediaLibraryPermission("media-library", new String[] { "read", "write", "list"}); <1>
                 .build();
     }
 
 }
 ----
-<1> The permission `media-library` that was created can perform `read`, `write`, and `list` actions.
+<1> Add a `media-library` permission that was created can perform `read`, `write`, and `list` actions.
 Because `MediaLibrary` is the `TvLibrary` class parent, a user with the `admin` role is also permitted to modify `TvLibrary`.
-<2> You can add a permission checker through `io.quarkus.security.runtime.QuarkusSecurityIdentity.Builder#addPermissionChecker`.
 
 CAUTION: Annotation-based permissions do not work with custom xref:security-customization.adoc#jaxrs-security-context[Jakarta REST SecurityContexts] because there are no permissions in `jakarta.ws.rs.core.SecurityContext`.
+
+[[permission-checker]]
+==== Create permission checkers
+
+By default, `SecurityIdentity` must be configured with permissions which can be used to check if this identity passes `@PermissionAllowed` authorization restrictions.
+Alternatively, you can use a `@PermissionChecker` annotation to mark any CDI bean method as a permission checker.
+The `@PermissionChecker` annotation value should match required permission declared by the `@PermissionsAllowed` annotation value.
+For example, a permission checker can be created like this:
+
+[source,java]
+----
+package org.acme.security.rest.resource;
+
+import io.quarkus.security.PermissionChecker;
+import io.quarkus.security.PermissionsAllowed;
+import io.quarkus.security.identity.SecurityIdentity;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+
+import org.jboss.resteasy.reactive.RestForm;
+import org.jboss.resteasy.reactive.RestPath;
+
+@Path("/project/{projectName}")
+public class ProjectResource {
+
+    @PermissionsAllowed("rename-project") <1>
+    @POST
+    public void renameProject(@RestPath String projectName, @RestForm String newName) {
+        Project project = Project.findByName(projectName);
+        project.name = newName;
+    }
+
+    @PermissionChecker("rename-project") <2>
+    boolean canRenameProject(SecurityIdentity identity, String projectName) { <3> <4>
+        var principalName = identity.getPrincipal().getName();
+        var user = User.getUserByName(principalName);
+        return userOwnsProject(projectName, user);
+    }
+}
+----
+<1> The permission required to access the `ProjectResource#renameProject` is the `rename-project` permission.
+<2> The `ProjectResource#canRenameProject` method authorizes access to the `ProjectResource#renameProject` endpoint.
+<3> The `SecurityIdentity` instance can be injected into any permission checker method.
+<4> In this example, the `rename-project` permission checker is declared on the same resource.
+However, there is no restriction on where this permission checker can be declared as demonstrated in the next example.
+
+NOTE: Permission checker methods can be declared on a normal scoped CDI bean or on a `@Singleton` bean.
+The `@Dependent` CDI bean scope is currently not supported.
+
+The permission checker above requires the `SecurityIdentity` instance to authorize the `renameProject` endpoint.
+Instead of declaring the `rename-project` permission checker directly on the resource, you can declare it on any CDI bean like in this example:
+
+[source,java]
+----
+package org.acme.security.rest.resource;
+
+import io.quarkus.security.PermissionChecker;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+@ApplicationScoped <1>
+public class ProjectPermissionChecker {
+
+    @PermissionChecker("rename-project")
+    boolean canRenameProject(String projectName, SecurityIdentity identity) {   <2>
+        var principalName = identity.getPrincipal().getName();
+        var user = User.getUserByName(principalName);
+        return userOwnsProject(projectName, user);
+    }
+
+}
+----
+<1> A CDI bean with the permission checker must be either a normal scoped bean or a `@Singleton` bean.
+<2> The permission checker method must return either `boolean` or `Uni<Boolean>`. Private checker methods are not supported.
+
+TIP: Permission checks run by default on event loops.
+Annotate a permission checker method with the `io.smallrye.common.annotation.Blocking` annotation if you want to run the check on a worker thread.
+
+Matching between the `@PermissionsAllowed` values and the `@PermissionChecker` value is based on string equality as shown in the example below:
+
+[source,java]
+----
+package org.acme.security;
+
+import io.quarkus.security.PermissionChecker;
+import io.quarkus.security.PermissionsAllowed;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class FileService {
+
+    @PermissionsAllowed({ "delete:all", "delete:dir" }) <1>
+    void deleteDirectory(Path directoryPath) {
+        // delete directory
+    }
+
+    @PermissionsAllowed(value = { "delete:service", "delete:file" }, inclusive = true) <2>
+    void deleteServiceFile(Path serviceFilePath) {
+        // delete service file
+    }
+
+    @PermissionChecker("delete:all")
+    boolean canDeleteAllDirectories(SecurityIdentity identity) {
+        String filePermissions = identity.getAttribute("user-group-file-permissions");
+        return filePermissions != null && filePermissions.contains("w");
+    }
+
+    @PermissionChecker("delete:service")
+    boolean canDeleteService(SecurityIdentity identity) {
+        return identity.hasRole("admin");
+    }
+
+    @PermissionChecker("delete:file")
+    boolean canDeleteFile(Path serviceFilePath) {
+        return serviceFilePath != null && !serviceFilePath.endsWith("critical");
+    }
+}
+----
+<1> The permission checker method `canDeleteAllDirectories` grants access to the `deleteDirectory` because the `delete:all` values are equal.
+<2> There must be exactly two permission checker methods, one for the `delete:service` permission and other for the `delete:file` permission.
+
+[[permission-meta-annotation]]
+==== Create permission meta-annotations
+
+`@PermissionsAllowed` can also be used in meta-annotations.
+For example, a new `@CanWrite` security annotation can be created like this:
+
+[source,java]
+----
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+import io.quarkus.security.PermissionsAllowed;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ ElementType.METHOD, ElementType.TYPE })
+@PermissionsAllowed(value = "write", permission = CustomPermission.class) <1>
+public @interface CanWrite {
+
+}
+----
+<1> Any method or class annotated with the `@CanWrite` annotation is secured with this `@PermissionsAllowed` annotation instance.
+
+[[permission-bean-params]]
+==== Pass `@BeanParam` parameters into a custom permission
+
+Quarkus can map fields of a secured method parameters to a custom permission constructor parameters.
+You can use this feature to pass `jakarta.ws.rs.BeanParam` parameters into your custom permission.
+Let's consider following Jakarta REST resource:
+
+[source,java]
+----
+package org.acme.security.rest.resource;
+
+import io.quarkus.security.PermissionsAllowed;
+import jakarta.ws.rs.BeanParam;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+
+@Path("/hello")
+public class HelloResource {
+
+    @PermissionsAllowed(value = "say-hello", params = "beanParam.securityContext.userPrincipal.name") <1>
+    @GET
+    public String sayHello(@BeanParam SimpleBeanParam beanParam) {
+        return "Hello from " + beanParam.uriInfo.getPath();
+    }
+
+}
+----
+<1> The `params` annotation attribute specifies that user principal name should be passed to the `BeanParamPermissionChecker#canSayHello` method.
+Other `BeanParamPermissionChecker#canSayHello` method parameters like `customAuthorizationHeader` and `query` are matched automatically.
+Quarkus identifies the `BeanParamPermissionChecker#canSayHello` method parameters among `beanParam` fields and their public accessors.
+To avoid ambiguous resolution, automatic detection only works for the `beanParam` fields.
+For that reason, we had to specify path to the user principal name explicitly.
+
+Where the `SimpleBeanParam` class is declared like in the example below:
+
+[source,java]
+----
+package org.acme.security.rest.dto;
+
+import java.util.List;
+
+import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.SecurityContext;
+import jakarta.ws.rs.core.UriInfo;
+
+public class SimpleBeanParam {
+
+    @HeaderParam("CustomAuthorization")
+    private String customAuthorizationHeader;
+
+    @Context
+    SecurityContext securityContext;
+
+    @Context
+    public UriInfo uriInfo;
+
+    @QueryParam("query")
+    public String query;    <1>
+
+    public SecurityContext getSecurityContext() { <2>
+        return securityContext;
+    }
+
+    public String customAuthorizationHeader() { <3>
+        return customAuthorizationHeader;
+    }
+}
+----
+<1> Quarkus Security can only pass public fields to a custom permission constructor.
+<2> Quarkus Security automatically uses public getter methods if they are available.
+<3> The `customAuthorizationHeader` field is not public, therefore Quarkus access this field with the `customAuthorizationHeader` accessor.
+That is particularly useful with Java records, where generated accessors are not prefixed with `get`.
+
+Here is an example of a `@PermissionChecker` method that checks the `say-hello` permission based on a user principal, custom header and query parameter:
+
+[source,java]
+----
+package org.acme.security.permission;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import io.quarkus.security.PermissionChecker;
+
+@ApplicationScoped
+public class BeanParamPermissionChecker {
+
+    @PermissionChecker("say-hello")
+    boolean canSayHello(String customAuthorizationHeader, String name, String query) {
+        boolean queryParamAllowedForPermissionName = checkQueryParams(query);
+        boolean usernameWhitelisted = isUserNameWhitelisted(name);
+        boolean customAuthorizationMatches = checkCustomAuthorization(customAuthorizationHeader);
+        return queryParamAllowedForPermissionName && usernameWhitelisted && customAuthorizationMatches;
+    }
+
+    ...
+}
+----
+
+NOTE: You can pass `@BeanParam` directly into a `@PermissionChecker` method and access its fields programmatically.
+Ability to reference `@BeanParam` fields with the `@PermissionsAllowed#params` attribute is useful when you have multiple differently structured `@BeanParam` classes.
 
 == References
 

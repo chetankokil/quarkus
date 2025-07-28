@@ -1,6 +1,5 @@
 package io.quarkus.launcher;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -18,20 +17,14 @@ public class RuntimeLaunchClassLoader extends ClassLoader {
 
     @Override
     protected Class<?> findClass(String name) throws ClassNotFoundException {
-        String resourceName = name.replace(".", "/") + ".class";
+        String resourceName = "META-INF/ide-deps/" + name.replace(".", "/") + ".class.ide-launcher-res";
         try {
-            try (InputStream is = getResourceAsStream(resourceName)) {
+            try (InputStream is = getParent().getResourceAsStream(resourceName)) {
                 if (is == null) {
                     throw new ClassNotFoundException(name);
                 }
                 definePackage(name);
-                byte[] buf = new byte[1024];
-                int r;
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                while ((r = is.read(buf)) > 0) {
-                    out.write(buf, 0, r);
-                }
-                byte[] bytes = out.toByteArray();
+                byte[] bytes = is.readAllBytes();
 
                 return defineClass(name, bytes, 0, bytes.length);
             }
@@ -42,14 +35,22 @@ public class RuntimeLaunchClassLoader extends ClassLoader {
     }
 
     private void definePackage(String name) {
-        final String pkgName = getPackageNameFromClassName(name);
-        if ((pkgName != null) && getPackage(pkgName) == null) {
-            synchronized (getClassLoadingLock(pkgName)) {
-                if (getPackage(pkgName) == null) {
-                    // this could certainly be improved to use the actual manifest
-                    definePackage(pkgName, null, null, null, null, null, null, null);
-                }
+        var pkgName = getPackageNameFromClassName(name);
+        if (pkgName == null) {
+            return;
+        }
+        if (getDefinedPackage(pkgName) != null) {
+            return;
+        }
+        try {
+            // this could certainly be improved to use the actual manifest
+            definePackage(pkgName, null, null, null, null, null, null, null);
+        } catch (IllegalArgumentException e) {
+            // retry, thrown by definePackage(), if a package for the same name is already defines by this class loader.
+            if (getDefinedPackage(pkgName) != null) {
+                return;
             }
+            throw e;
         }
     }
 

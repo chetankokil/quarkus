@@ -31,8 +31,7 @@ public interface HibernateOrmConfigPersistenceUnit {
      * <p>
      * If undefined, it will use the default datasource.
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> datasource();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> datasource();
 
     /**
      * The packages in which the entities affected to this persistence unit are located.
@@ -47,10 +46,10 @@ public interface HibernateOrmConfigPersistenceUnit {
 
     // @formatter:off
     /**
-     * Path to a file containing the SQL statements to execute when Hibernate ORM starts.
+     * Paths to files containing the SQL statements to execute when Hibernate ORM starts.
      *
-     * The file is retrieved from the classpath resources,
-     * so it must be located in the resources directory (e.g. `src/main/resources`).
+     * The files are retrieved from the classpath resources,
+     * so they must be located in the resources directory (e.g. `src/main/resources`).
      *
      * The default value for this setting differs depending on the Quarkus launch mode:
      *
@@ -75,14 +74,15 @@ public interface HibernateOrmConfigPersistenceUnit {
      *
      * [NOTE]
      * ====
-     * Quarkus supports `.sql` file with SQL statements or comments spread over multiple lines.
+     * Quarkus supports files with SQL statements or comments spread over multiple lines,
+     * or `.zip` files containing those files.
      * Each SQL statement must be terminated by a semicolon.
      * ====
      *
      * @asciidoclet
      */
     // @formatter:on
-    @ConfigDocDefault("import.sql in DEV, TEST ; no-file otherwise")
+    @ConfigDocDefault("import.sql in dev and test modes ; no-file otherwise")
     Optional<List<@WithConverter(TrimmedStringConverter.class) String>> sqlLoadScript();
 
     /**
@@ -113,16 +113,14 @@ public interface HibernateOrmConfigPersistenceUnit {
      *
      * Class name of the Hibernate PhysicalNamingStrategy implementation
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> physicalNamingStrategy();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> physicalNamingStrategy();
 
     /**
      * Pluggable strategy for applying implicit naming rules when an explicit name is not given.
      *
      * Class name of the Hibernate ImplicitNamingStrategy implementation
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> implicitNamingStrategy();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> implicitNamingStrategy();
 
     /**
      * Class name of a custom
@@ -140,8 +138,7 @@ public interface HibernateOrmConfigPersistenceUnit {
      *
      * @asciidoclet
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> metadataBuilderContributor();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> metadataBuilderContributor();
 
     /**
      * XML files to configure the entity mapping, e.g. {@code META-INF/my-orm.xml}.
@@ -223,15 +220,16 @@ public interface HibernateOrmConfigPersistenceUnit {
      *
      * @asciidoclet
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> multitenant();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> multitenant();
 
     /**
      * Defines the name of the datasource to use in case of SCHEMA approach. The datasource of the persistence unit will be used
      * if not set.
+     *
+     * @deprecated Use {@link #datasource()} instead.
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> multitenantSchemaDatasource();
+    @Deprecated
+    Optional<@WithConverter(TrimmedStringConverter.class) String> multitenantSchemaDatasource();
 
     /**
      * If hibernate is not auto generating the schema, and Quarkus is running in development mode
@@ -273,32 +271,33 @@ public interface HibernateOrmConfigPersistenceUnit {
     interface HibernateOrmConfigPersistenceUnitDialect {
 
         /**
-         * Class name of the Hibernate ORM dialect.
+         * Name of the Hibernate ORM dialect.
          *
-         * The complete list of bundled dialects is available in the
-         * https://docs.jboss.org/hibernate/stable/orm/javadocs/org/hibernate/dialect/package-summary.html[Hibernate ORM
-         * JavaDoc].
-         *
-         * Setting the dialect directly is only recommended as a last resort:
-         * most popular databases have a corresponding Quarkus extension,
-         * allowing Quarkus to select the dialect automatically,
-         * in which case you do not need to set the dialect at all,
-         * though you may want to set
-         * xref:datasource.adoc#quarkus-datasource_quarkus.datasource.db-version[`quarkus.datasource.db-version`] as
-         * high as possible
+         * For xref:datasource.adoc#extensions-and-database-drivers-reference[supported databases],
+         * this property does not need to be set explicitly:
+         * it is selected automatically based on the datasource,
+         * and configured using the xref:datasource.adoc#quarkus-datasource_quarkus.datasource.db-version[DB version set on the
+         * datasource]
          * to benefit from the best performance and latest features.
          *
          * If your database does not have a corresponding Quarkus extension,
-         * you will need to set the dialect directly.
+         * you *will* need to set this property explicitly.
          * In that case, keep in mind that the JDBC driver and Hibernate ORM dialect
          * may not work properly in GraalVM native executables.
+         *
+         * For built-in dialects, the expected value is one of the names
+         * in the link:{hibernate-orm-dialect-docs-url}[official list of dialects],
+         * *without* the `Dialect` suffix,
+         * for example `Cockroach` for `CockroachDialect`.
+         *
+         * For third-party dialects, the expected value is the fully-qualified class name,
+         * for example `com.acme.hibernate.AcmeDbDialect`.
          *
          * @asciidoclet
          */
         @WithParentName
         @ConfigDocDefault("selected automatically for most popular databases")
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> dialect();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> dialect();
 
         /**
          * The storage engine to use when the dialect supports multiple storage engines.
@@ -307,8 +306,7 @@ public interface HibernateOrmConfigPersistenceUnit {
          *
          * @asciidoclet
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> storageEngine();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> storageEngine();
 
         default boolean isAnyPropertySet() {
             return dialect().isPresent() || storageEngine().isPresent();
@@ -421,20 +419,6 @@ public interface HibernateOrmConfigPersistenceUnit {
          * Assumes the value retrieved from the table/sequence is the lower end of the pool.
          *
          * Upon retrieving value `N`, the new pool of identifiers will go from `N` to `N + <allocation size> - 1`, inclusive.
-         * `pooled`::
-         * Assumes the value retrieved from the table/sequence is the higher end of the pool.
-         * +
-         * Upon retrieving value `N`, the new pool of identifiers will go from `N - <allocation size>` to `N + <allocation size>
-         * - 1`, inclusive.
-         * +
-         * The first value, `1`, is handled differently to avoid negative identifiers.
-         * +
-         * Use this to get the legacy behavior of Quarkus 2 / Hibernate ORM 5 or older.
-         * `none`::
-         * No optimizer, resulting in a database call each and every time an identifier value is needed from the generator.
-         * +
-         * Not recommended in production environments:
-         * may result in degraded performance and/or frequent gaps in identifier values.
          *
          * @asciidoclet
          */
@@ -503,6 +487,19 @@ public interface HibernateOrmConfigPersistenceUnit {
         @WithDefault("true")
         boolean inClauseParameterPadding();
 
+        /**
+         * When limits cannot be applied on the database side,
+         * trigger an exception instead of attempting badly-performing in-memory result set limits.
+         *
+         * When pagination is used in combination with a fetch join applied to a collection or many-valued association,
+         * the limit must be applied in-memory instead of on the database.
+         * This should be avoided as it typically has terrible performance characteristics.
+         *
+         * @asciidoclet
+         */
+        @WithDefault("false")
+        boolean failOnPaginationOverCollectionFetch();
+
         default boolean isAnyPropertySet() {
             return queryPlanCacheMaxSize() != DEFAULT_QUERY_PLAN_CACHE_MAX_SIZE
                     || defaultNullOrdering() != NullOrdering.NONE
@@ -546,8 +543,7 @@ public interface HibernateOrmConfigPersistenceUnit {
          *
          * See `quarkus.hibernate-orm.mapping.timezone.default-storage`.
          */
-        @WithConverter(TrimmedStringConverter.class)
-        Optional<String> timezone();
+        Optional<@WithConverter(TrimmedStringConverter.class) String> timezone();
 
         /**
          * How many rows are fetched at a time by the JDBC driver.
@@ -673,9 +669,38 @@ public interface HibernateOrmConfigPersistenceUnit {
 
         /**
          * Enables the Bean Validation integration.
+         *
+         * @deprecated Use {@link #mode()} instead.
          */
+        @Deprecated(since = "3.19", forRemoval = true)
         @WithDefault("true")
         boolean enabled();
+
+        /**
+         * Defines how the Bean Validation integration behaves.
+         */
+        @WithDefault("auto")
+        Set<ValidationMode> mode();
+
+        enum ValidationMode {
+            /**
+             * If a Bean Validation provider is present then behaves as if both {@link ValidationMode#CALLBACK} and
+             * {@link ValidationMode#DDL} modes are configured. Otherwise, same as {@link ValidationMode#NONE}.
+             */
+            AUTO,
+            /**
+             * Bean Validation will perform the lifecycle event validation.
+             */
+            CALLBACK,
+            /**
+             * Bean Validation constraints will be considered for the DDL operations.
+             */
+            DDL,
+            /**
+             * Bean Validation integration will be disabled.
+             */
+            NONE
+        }
     }
 
 }

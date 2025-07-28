@@ -6,7 +6,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.security.Permission;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,11 +15,13 @@ import java.util.function.Function;
 
 import jakarta.enterprise.inject.Instance;
 
+import io.quarkus.arc.ClientProxy;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.security.StringPermission;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.vertx.http.runtime.PolicyConfig;
 import io.quarkus.vertx.http.runtime.PolicyMappingConfig;
+import io.quarkus.vertx.http.runtime.security.HttpSecurityConfiguration.AuthenticationMechanism;
 import io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy.AuthorizationRequestContext;
 import io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy.CheckResult;
 import io.quarkus.vertx.http.runtime.security.ImmutablePathMatcher.PathMatch;
@@ -40,26 +41,28 @@ public class AbstractPathMatchingHttpSecurityPolicy {
     private final List<ImmutablePathMatcher<List<HttpMatcher>>> sharedPermissionsPathMatchers;
     private final boolean hasNoPermissions;
 
-    public AbstractPathMatchingHttpSecurityPolicy(Map<String, PolicyMappingConfig> permissions,
+    AbstractPathMatchingHttpSecurityPolicy(List<HttpSecurityConfiguration.HttpPermissionCarrier> httpPermissions,
             Map<String, PolicyConfig> rolePolicy, String rootPath, Instance<HttpSecurityPolicy> installedPolicies,
             PolicyMappingConfig.AppliesTo appliesTo) {
-        boolean hasNoPermissions = permissions.isEmpty();
+        boolean hasNoPermissions = true;
         var namedHttpSecurityPolicies = toNamedHttpSecPolicies(rolePolicy, installedPolicies);
         List<ImmutablePathMatcher<List<HttpMatcher>>> sharedPermsMatchers = new ArrayList<>();
-        final var builder = ImmutablePathMatcher.<List<HttpMatcher>> builder().handlerAccumulator(List::addAll);
-        for (PolicyMappingConfig policyMappingConfig : permissions.values()) {
-            if (appliesTo != policyMappingConfig.appliesTo) {
+        final var builder = ImmutablePathMatcher.<List<HttpMatcher>> builder().handlerAccumulator(List::addAll)
+                .rootPath(rootPath);
+        for (var httpPermission : httpPermissions) {
+            if (appliesTo != httpPermission.getAppliesTo()) {
                 continue;
             }
             if (hasNoPermissions) {
                 hasNoPermissions = false;
             }
-            if (policyMappingConfig.shared) {
-                final var builder1 = ImmutablePathMatcher.<List<HttpMatcher>> builder().handlerAccumulator(List::addAll);
-                addPermissionToPathMatcher(namedHttpSecurityPolicies, rootPath, policyMappingConfig, builder1);
+            if (httpPermission.isShared()) {
+                final var builder1 = ImmutablePathMatcher.<List<HttpMatcher>> builder().handlerAccumulator(List::addAll)
+                        .rootPath(rootPath);
+                addPermissionToPathMatcher(namedHttpSecurityPolicies, httpPermission, builder1);
                 sharedPermsMatchers.add(builder1.build());
             } else {
-                addPermissionToPathMatcher(namedHttpSecurityPolicies, rootPath, policyMappingConfig, builder);
+                addPermissionToPathMatcher(namedHttpSecurityPolicies, httpPermission, builder);
             }
         }
         this.hasNoPermissions = hasNoPermissions;
@@ -67,16 +70,29 @@ public class AbstractPathMatchingHttpSecurityPolicy {
         this.pathMatcher = builder.build();
     }
 
-    public String getAuthMechanismName(RoutingContext routingContext) {
+    AuthenticationMechanism getAuthMechanism(RoutingContext routingContext) {
         if (sharedPermissionsPathMatchers != null) {
             for (ImmutablePathMatcher<List<HttpMatcher>> matcher : sharedPermissionsPathMatchers) {
-                String authMechanismName = getAuthMechanismName(routingContext, matcher);
-                if (authMechanismName != null) {
-                    return authMechanismName;
+                AuthenticationMechanism authMechanism = getAuthMechanism(routingContext, matcher);
+                if (authMechanism != null) {
+                    return authMechanism;
                 }
             }
         }
-        return getAuthMechanismName(routingContext, pathMatcher);
+        return getAuthMechanism(routingContext, pathMatcher);
+    }
+
+    /**
+     * @deprecated This method is internal by nature, if you have a good use case, please report it
+     *             so that we can document the use case and test it.
+     */
+    @Deprecated(forRemoval = true, since = "3.25")
+    public String getAuthMechanismName(RoutingContext routingContext) {
+        AuthenticationMechanism authenticationMechanism = getAuthMechanism(routingContext);
+        if (authenticationMechanism != null) {
+            return authenticationMechanism.name();
+        }
+        return null;
     }
 
     public boolean hasNoPermissions() {
@@ -85,6 +101,24 @@ public class AbstractPathMatchingHttpSecurityPolicy {
 
     public Uni<CheckResult> checkPermission(RoutingContext routingContext, Uni<SecurityIdentity> identity,
             AuthorizationRequestContext requestContext) {
+        return checkPermissions(routingContext, identity, requestContext);
+    }
+
+    Uni<CheckResult> checkPermissions(RoutingContext routingContext, Uni<SecurityIdentity> identity,
+            AuthorizationRequestContext requestContext, HttpSecurityPolicy... additionalPolicies) {
+        final List<HttpSecurityPolicy> permissionCheckers = hasNoPermissions ? new ArrayList<>()
+                : getHttpSecurityPolicies(routingContext);
+        if (additionalPolicies.length > 0) {
+            if (additionalPolicies.length == 1) {
+                permissionCheckers.add(additionalPolicies[0]);
+            } else {
+                permissionCheckers.addAll(Arrays.asList(additionalPolicies));
+            }
+        }
+        return doPermissionCheck(routingContext, identity, 0, null, permissionCheckers, requestContext);
+    }
+
+    private List<HttpSecurityPolicy> getHttpSecurityPolicies(RoutingContext routingContext) {
         final List<HttpSecurityPolicy> permissionCheckers;
         if (sharedPermissionsPathMatchers == null) {
             permissionCheckers = findPermissionCheckers(routingContext, pathMatcher);
@@ -95,7 +129,7 @@ public class AbstractPathMatchingHttpSecurityPolicy {
             }
             permissionCheckers.addAll(findPermissionCheckers(routingContext, pathMatcher));
         }
-        return doPermissionCheck(routingContext, identity, 0, null, permissionCheckers, requestContext);
+        return permissionCheckers;
     }
 
     private Uni<CheckResult> doPermissionCheck(RoutingContext routingContext,
@@ -114,13 +148,17 @@ public class AbstractPathMatchingHttpSecurityPolicy {
                     @Override
                     public Uni<? extends CheckResult> apply(CheckResult checkResult) {
                         if (!checkResult.isPermitted()) {
-                            return Uni.createFrom().item(CheckResult.DENY);
+                            if (checkResult.getAugmentedIdentity() == null) {
+                                return CheckResult.deny();
+                            } else {
+                                return Uni.createFrom().item(new CheckResult(false, checkResult.getAugmentedIdentity()));
+                            }
                         } else {
                             if (checkResult.getAugmentedIdentity() != null) {
 
                                 //attempt to run the next checker
                                 return doPermissionCheck(routingContext,
-                                        Uni.createFrom().item(checkResult.getAugmentedIdentity()), index + 1,
+                                        checkResult.getAugmentedIdentityAsUni(), index + 1,
                                         checkResult.getAugmentedIdentity(),
                                         permissionCheckers,
                                         requestContext);
@@ -135,13 +173,9 @@ public class AbstractPathMatchingHttpSecurityPolicy {
                 });
     }
 
-    private static String getAuthMechanismName(RoutingContext routingContext,
+    private static AuthenticationMechanism getAuthMechanism(RoutingContext routingContext,
             ImmutablePathMatcher<List<HttpMatcher>> pathMatcher) {
-        PathMatch<List<HttpMatcher>> toCheck = pathMatcher.match(routingContext.normalizedPath());
-        if (toCheck.getValue() == null || toCheck.getValue().isEmpty()) {
-            return null;
-        }
-        for (HttpMatcher i : toCheck.getValue()) {
+        for (HttpMatcher i : findHttpMatchers(routingContext, pathMatcher)) {
             if (i.authMechanism != null) {
                 return i.authMechanism;
             }
@@ -149,42 +183,50 @@ public class AbstractPathMatchingHttpSecurityPolicy {
         return null;
     }
 
-    private static void addPermissionToPathMatcher(Map<String, HttpSecurityPolicy> permissionCheckers, String rootPath,
-            PolicyMappingConfig policyMappingConfig,
+    private static void addPermissionToPathMatcher(Map<String, HttpSecurityPolicy> permissionCheckers,
+            HttpSecurityConfiguration.HttpPermissionCarrier httpPermission,
             ImmutablePathMatcher.ImmutablePathMatcherBuilder<List<HttpMatcher>> builder) {
-        HttpSecurityPolicy checker = permissionCheckers.get(policyMappingConfig.policy);
-        if (checker == null) {
-            throw new RuntimeException("Unable to find HTTP security policy " + policyMappingConfig.policy);
+        final HttpSecurityPolicy policy;
+        if (httpPermission.getPolicy().instance() != null) {
+            policy = httpPermission.getPolicy().instance();
+        } else {
+            String policyName = httpPermission.getPolicy().name();
+            policy = permissionCheckers.get(policyName);
+            if (policy == null) {
+                throw new RuntimeException("Unable to find HTTP security policy " + policyName);
+            }
         }
 
-        if (policyMappingConfig.enabled.orElse(Boolean.TRUE)) {
-            for (String path : policyMappingConfig.paths.orElse(Collections.emptyList())) {
-                path = path.trim();
-                if (!path.startsWith("/")) {
-                    path = rootPath + path;
-                }
-                HttpMatcher m = new HttpMatcher(policyMappingConfig.authMechanism.orElse(null),
-                        new HashSet<>(policyMappingConfig.methods.orElse(Collections.emptyList())), checker);
-                List<HttpMatcher> perms = new ArrayList<>();
-                perms.add(m);
-                builder.addPath(path, perms);
-            }
+        for (String path : httpPermission.getPaths()) {
+            HttpMatcher m = new HttpMatcher(httpPermission.getAuthMechanism(), httpPermission.getMethods(), policy);
+            List<HttpMatcher> perms = new ArrayList<>();
+            perms.add(m);
+            builder.addPath(path, perms);
         }
     }
 
     private static List<HttpSecurityPolicy> findPermissionCheckers(RoutingContext context,
             ImmutablePathMatcher<List<HttpMatcher>> pathMatcher) {
+        List<HttpSecurityPolicy> list = new ArrayList<>();
+        for (HttpMatcher httpMatcher : findHttpMatchers(context, pathMatcher)) {
+            list.add(httpMatcher.checker);
+        }
+        return list;
+    }
+
+    private static List<HttpMatcher> findHttpMatchers(RoutingContext context,
+            ImmutablePathMatcher<List<HttpMatcher>> pathMatcher) {
         PathMatch<List<HttpMatcher>> toCheck = pathMatcher.match(context.normalizedPath());
         if (toCheck.getValue() == null || toCheck.getValue().isEmpty()) {
-            return Collections.emptyList();
+            return List.of();
         }
-        List<HttpSecurityPolicy> methodMatch = new ArrayList<>();
-        List<HttpSecurityPolicy> noMethod = new ArrayList<>();
+        List<HttpMatcher> methodMatch = new ArrayList<>();
+        List<HttpMatcher> noMethod = new ArrayList<>();
         for (HttpMatcher i : toCheck.getValue()) {
             if (i.methods == null || i.methods.isEmpty()) {
-                noMethod.add(i.checker);
+                noMethod.add(i);
             } else if (i.methods.contains(context.request().method().toString())) {
-                methodMatch.add(i.checker);
+                methodMatch.add(i);
             }
         }
         if (!methodMatch.isEmpty()) {
@@ -193,9 +235,8 @@ public class AbstractPathMatchingHttpSecurityPolicy {
             return noMethod;
         } else {
             //we deny if we did not match due to method filtering
-            return Collections.singletonList(DenySecurityPolicy.INSTANCE);
+            return List.of(HttpMatcher.DENY);
         }
-
     }
 
     static boolean policyApplied(RoutingContext routingContext) {
@@ -214,18 +255,21 @@ public class AbstractPathMatchingHttpSecurityPolicy {
                 if (policy.name().isBlank()) {
                     throw new ConfigurationException("HTTP Security policy '" + policy + "' name must not be blank");
                 }
-                namedPolicies.put(policy.name(), policy);
+                var previousPolicy = namedPolicies.put(policy.name(), policy);
+                if (previousPolicy != null) {
+                    throw duplicateNamedPoliciesNotAllowedEx(previousPolicy, policy);
+                }
             }
         }
 
         for (Map.Entry<String, PolicyConfig> e : rolePolicies.entrySet()) {
             final PolicyConfig policyConfig = e.getValue();
             final Map<String, Set<Permission>> roleToPermissions;
-            if (policyConfig.permissions.isEmpty()) {
+            if (policyConfig.permissions().isEmpty()) {
                 roleToPermissions = null;
             } else {
                 roleToPermissions = new HashMap<>();
-                for (Map.Entry<String, List<String>> roleToPermissionStr : policyConfig.permissions.entrySet()) {
+                for (Map.Entry<String, List<String>> roleToPermissionStr : policyConfig.permissions().entrySet()) {
 
                     // collect permission actions
                     // perm1:action1,perm2:action2,perm1:action3 -> perm1:action1,action3 and perm2:action2
@@ -239,7 +283,7 @@ public class AbstractPathMatchingHttpSecurityPolicy {
                     // create permissions
                     var permissions = new HashSet<Permission>();
                     for (PermissionToActions helper : cache.values()) {
-                        if (StringPermission.class.getName().equals(policyConfig.permissionClass)) {
+                        if (StringPermission.class.getName().equals(policyConfig.permissionClass())) {
                             permissions.add(new StringPermission(helper.permissionName, helper.actions.toArray(new String[0])));
                         } else {
                             permissions.add(customPermissionCreator(policyConfig, helper));
@@ -249,12 +293,26 @@ public class AbstractPathMatchingHttpSecurityPolicy {
                     roleToPermissions.put(role, Set.copyOf(permissions));
                 }
             }
-            namedPolicies.put(e.getKey(),
-                    new RolesAllowedHttpSecurityPolicy(policyConfig.rolesAllowed, roleToPermissions, policyConfig.roles));
+            var rolesAllowedPolicy = new RolesAllowedHttpSecurityPolicy(policyConfig.rolesAllowed(), roleToPermissions,
+                    policyConfig.roles());
+            var previousPolicy = namedPolicies.put(e.getKey(), rolesAllowedPolicy);
+            if (previousPolicy != null) {
+                throw duplicateNamedPoliciesNotAllowedEx(previousPolicy, rolesAllowedPolicy);
+            }
         }
-        namedPolicies.put("deny", new DenySecurityPolicy());
-        namedPolicies.put("permit", new PermitSecurityPolicy());
-        namedPolicies.put("authenticated", new AuthenticatedHttpSecurityPolicy());
+
+        var previousPolicy = namedPolicies.put(DenySecurityPolicy.NAME, DenySecurityPolicy.INSTANCE);
+        if (previousPolicy != null) {
+            throw duplicateNamedPoliciesNotAllowedEx(previousPolicy, DenySecurityPolicy.INSTANCE);
+        }
+        previousPolicy = namedPolicies.put(PermitSecurityPolicy.NAME, new PermitSecurityPolicy());
+        if (previousPolicy != null) {
+            throw duplicateNamedPoliciesNotAllowedEx(previousPolicy, new PermitSecurityPolicy());
+        }
+        previousPolicy = namedPolicies.put(AuthenticatedHttpSecurityPolicy.NAME, new AuthenticatedHttpSecurityPolicy());
+        if (previousPolicy != null) {
+            throw duplicateNamedPoliciesNotAllowedEx(previousPolicy, new AuthenticatedHttpSecurityPolicy());
+        }
         return namedPolicies;
     }
 
@@ -335,15 +393,15 @@ public class AbstractPathMatchingHttpSecurityPolicy {
 
     private static Permission customPermissionCreator(PolicyConfig policyConfig, PermissionToActions helper) {
         try {
-            var constructor = loadClass(policyConfig.permissionClass).getConstructors()[0];
-            if (acceptsActions(policyConfig.permissionClass)) {
+            var constructor = loadClass(policyConfig.permissionClass()).getConstructors()[0];
+            if (acceptsActions(policyConfig.permissionClass())) {
                 return (Permission) constructor.newInstance(helper.permissionName, helper.actions.toArray(new String[0]));
             } else {
                 return (Permission) constructor.newInstance(helper.permissionName);
             }
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
             throw new RuntimeException(String.format("Failed to create Permission - class '%s', name '%s', actions '%s'",
-                    policyConfig.permissionClass, helper.permissionName,
+                    policyConfig.permissionClass(), helper.permissionName,
                     Arrays.toString(helper.actions.toArray(new String[0]))), e);
         }
     }
@@ -364,16 +422,14 @@ public class AbstractPathMatchingHttpSecurityPolicy {
         }
     }
 
-    static class HttpMatcher {
+    static ConfigurationException duplicateNamedPoliciesNotAllowedEx(HttpSecurityPolicy policy1, HttpSecurityPolicy policy2) {
+        String policyClassName1 = ClientProxy.unwrap(policy1).getClass().getName();
+        String policyClassName2 = ClientProxy.unwrap(policy2).getClass().getName();
+        return new ConfigurationException("Only one HttpSecurityPolicy with the name '"
+                + policy1.name() + "' is allowed, but found: " + policyClassName1 + " and " + policyClassName2);
+    }
 
-        final String authMechanism;
-        final Set<String> methods;
-        final HttpSecurityPolicy checker;
-
-        HttpMatcher(String authMechanism, Set<String> methods, HttpSecurityPolicy checker) {
-            this.methods = methods;
-            this.checker = checker;
-            this.authMechanism = authMechanism;
-        }
+    record HttpMatcher(AuthenticationMechanism authMechanism, Set<String> methods, HttpSecurityPolicy checker) {
+        private static final HttpMatcher DENY = new HttpMatcher(null, Set.of(), DenySecurityPolicy.INSTANCE);
     }
 }

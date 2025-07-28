@@ -4,9 +4,9 @@ import static io.vertx.core.spi.resolver.ResolverProvider.DISABLE_DNS_RESOLVER_P
 
 import java.io.InputStream;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,7 +18,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.quarkus.runtime.ResettableSystemProperties;
 import io.quarkus.runtime.util.ClassPathUtils;
+import io.quarkus.spring.cloud.config.client.runtime.eureka.DiscoveryService;
+import io.quarkus.spring.cloud.config.client.runtime.eureka.EurekaClient;
+import io.quarkus.spring.cloud.config.client.runtime.eureka.EurekaResponseMapper;
+import io.quarkus.spring.cloud.config.client.runtime.eureka.RandomEurekaInstanceSelector;
+import io.quarkus.spring.cloud.config.client.runtime.util.UrlUtility;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.net.JksOptions;
@@ -43,18 +49,41 @@ public class VertxSpringCloudConfigGateway implements SpringCloudConfigClientGat
     private final SpringCloudConfigClientConfig config;
     private final Vertx vertx;
     private final WebClient webClient;
-    private final URI baseURI;
+    private final ConfigServerBaseUrlProvider configServerBaseUrlProvider;
 
     public VertxSpringCloudConfigGateway(SpringCloudConfigClientConfig config) {
         this.config = config;
-        try {
-            this.baseURI = determineBaseUri(config);
-        } catch (URISyntaxException e) {
-            throw new IllegalArgumentException("Value: '" + config.url()
-                    + "' of property 'quarkus.spring-cloud-config.url' is invalid", e);
-        }
         this.vertx = createVertxInstance();
         this.webClient = createHttpClient(vertx, config);
+        this.configServerBaseUrlProvider = createConfigServerProvider(config);
+    }
+
+    private ConfigServerBaseUrlProvider createConfigServerProvider(SpringCloudConfigClientConfig config) {
+        if (!config.discovery().isPresent() || (!config.discovery().get().enabled())) {
+            return new DirectConfigServerBaseUrlProvider(config);
+        }
+        DiscoveryService discoveryService = createDiscoveryService(config.discovery().get());
+        return new DiscoveryConfigServerBaseUrlProvider(discoveryService, config);
+    }
+
+    private DiscoveryService createDiscoveryService(SpringCloudConfigClientConfig.DiscoveryConfig config) {
+        EurekaClient eurekaClient = createEurekaClient(config.eurekaConfig().get());
+        return new DiscoveryService(eurekaClient);
+    }
+
+    private EurekaClient createEurekaClient(SpringCloudConfigClientConfig.DiscoveryConfig.EurekaConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("Eureka configuration is required");
+        }
+        Duration fetchInterval = config.registryFetchIntervalSeconds();
+        EurekaResponseMapper responseMapper = new EurekaResponseMapper();
+        RandomEurekaInstanceSelector instanceSelector = new RandomEurekaInstanceSelector();
+
+        return new EurekaClient(
+                webClient,
+                fetchInterval,
+                responseMapper,
+                instanceSelector);
     }
 
     private Vertx createVertxInstance() {
@@ -62,20 +91,10 @@ public class VertxSpringCloudConfigGateway implements SpringCloudConfigClientGat
         // This is done using the DISABLE_DNS_RESOLVER_PROP_NAME system property.
         // The DNS resolver used by vert.x is configured during the (synchronous) initialization.
         // So, we just need to disable the async resolver around the Vert.x instance creation.
-        String originalValue = System.getProperty(DISABLE_DNS_RESOLVER_PROP_NAME);
-        Vertx vertx;
-        try {
-            System.setProperty(DISABLE_DNS_RESOLVER_PROP_NAME, "true");
-            vertx = Vertx.vertx(new VertxOptions());
-        } finally {
-            // Restore the original value
-            if (originalValue == null) {
-                System.clearProperty(DISABLE_DNS_RESOLVER_PROP_NAME);
-            } else {
-                System.setProperty(DISABLE_DNS_RESOLVER_PROP_NAME, originalValue);
-            }
+        try (var resettableSystemProperties = ResettableSystemProperties.of(
+                DISABLE_DNS_RESOLVER_PROP_NAME, "true")) {
+            return Vertx.vertx(new VertxOptions());
         }
-        return vertx;
     }
 
     public static WebClient createHttpClient(Vertx vertx, SpringCloudConfigClientConfig config) {
@@ -165,37 +184,26 @@ public class VertxSpringCloudConfigGateway implements SpringCloudConfigClientGat
         return inputStream.readAllBytes();
     }
 
-    private URI determineBaseUri(SpringCloudConfigClientConfig springCloudConfigClientConfig) throws URISyntaxException {
-        String url = springCloudConfigClientConfig.url();
-        if (null == url || url.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "The 'quarkus.spring-cloud-config.url' property cannot be empty");
-        }
-        if (url.endsWith("/")) {
-            return new URI(url.substring(0, url.length() - 1));
-        }
-        return new URI(url);
-    }
-
-    private String finalURI(String applicationName, String profile) {
+    private ConfigServerUrl toConfigServerUrl(String applicationName, String profile) {
+        URI baseURI = configServerBaseUrlProvider.get();
         String path = baseURI.getPath();
-        List<String> finalPathSegments = new ArrayList<String>();
+        List<String> finalPathSegments = new ArrayList<>();
         finalPathSegments.add(path);
         finalPathSegments.add(applicationName);
         finalPathSegments.add(profile);
         if (config.label().isPresent()) {
             finalPathSegments.add(config.label().get());
         }
-        return String.join("/", finalPathSegments);
+        return new ConfigServerUrl(baseURI, UrlUtility.getPort(baseURI), baseURI.getHost(),
+                String.join("/", finalPathSegments));
     }
 
     @Override
     public Uni<Response> exchange(String applicationName, String profile) {
-        final String requestURI = finalURI(applicationName, profile);
-        String finalURI = getFinalURI(applicationName, profile);
+        final ConfigServerUrl requestURI = toConfigServerUrl(applicationName, profile);
         HttpRequest<Buffer> request = webClient
-                .get(getPort(baseURI), baseURI.getHost(), requestURI)
-                .ssl(isHttps(baseURI))
+                .get(requestURI.port(), requestURI.host(), requestURI.completeURLString())
+                .ssl(UrlUtility.isHttps(requestURI.baseURI()))
                 .putHeader("Accept", "application/json");
         if (config.usernameAndPasswordSet()) {
             request.basicAuthentication(config.username().get(), config.password().get());
@@ -203,16 +211,16 @@ public class VertxSpringCloudConfigGateway implements SpringCloudConfigClientGat
         for (Map.Entry<String, String> entry : config.headers().entrySet()) {
             request.putHeader(entry.getKey(), entry.getValue());
         }
-        log.debug("Attempting to read configuration from '" + finalURI + "'.");
+        log.debug("Attempting to read configuration from '" + requestURI.completeURLString() + "'.");
         return request.send().map(r -> {
             log.debug("Received HTTP response code '" + r.statusCode() + "'");
             if (r.statusCode() != 200) {
                 throw new RuntimeException("Got unexpected HTTP response code " + r.statusCode()
-                        + " from " + finalURI);
+                        + " from " + requestURI.completeURLString());
             } else {
                 String bodyAsString = r.bodyAsString();
                 if (bodyAsString.isEmpty()) {
-                    throw new RuntimeException("Got empty HTTP response body " + finalURI);
+                    throw new RuntimeException("Got empty HTTP response body " + requestURI.completeURLString());
                 }
                 try {
                     log.debug("Attempting to deserialize response");
@@ -222,22 +230,6 @@ public class VertxSpringCloudConfigGateway implements SpringCloudConfigClientGat
                 }
             }
         });
-    }
-
-    private boolean isHttps(URI uri) {
-        return uri.getScheme().contains("https");
-    }
-
-    private int getPort(URI uri) {
-        return uri.getPort() != -1 ? uri.getPort() : (isHttps(uri) ? 443 : 80);
-    }
-
-    private String getFinalURI(String applicationName, String profile) {
-        String finalURI = baseURI.toString() + "/" + applicationName + "/" + profile;
-        if (config.label().isPresent()) {
-            finalURI += "/" + config.label().get();
-        }
-        return finalURI;
     }
 
     @Override

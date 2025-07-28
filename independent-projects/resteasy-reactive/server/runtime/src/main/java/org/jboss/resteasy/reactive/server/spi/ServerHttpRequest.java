@@ -34,6 +34,8 @@ public interface ServerHttpRequest {
 
     String getQueryParam(String name);
 
+    Map<String, List<String>> getQueryParamsMap();
+
     List<String> getAllQueryParams(String name);
 
     String query();
@@ -51,6 +53,11 @@ public interface ServerHttpRequest {
     ServerHttpResponse resumeRequestInput();
 
     ServerHttpResponse setReadListener(ReadCallback callback);
+
+    // this is done for compatibility reasons - we can only properly implement it in Quarkus, but we don't want the callers to throw
+    default ForwardedInfo getForwardedInfo() {
+        return null;
+    }
 
     /**
      * Unwraps a backing object

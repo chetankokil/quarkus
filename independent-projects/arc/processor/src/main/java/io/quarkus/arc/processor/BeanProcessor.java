@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 
 import jakarta.annotation.Priority;
 
+import org.jboss.jandex.AnnotationTransformation;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
@@ -32,6 +33,7 @@ import org.jboss.logging.Logger;
 
 import io.quarkus.arc.InjectableBean;
 import io.quarkus.arc.processor.BeanDeploymentValidator.ValidationContext;
+import io.quarkus.arc.processor.BeanRegistrar.RegistrationContext;
 import io.quarkus.arc.processor.BuildExtension.BuildContext;
 import io.quarkus.arc.processor.BuildExtension.Key;
 import io.quarkus.arc.processor.CustomAlterableContexts.CustomAlterableContextInfo;
@@ -39,6 +41,8 @@ import io.quarkus.arc.processor.ResourceOutput.Resource;
 import io.quarkus.arc.processor.ResourceOutput.Resource.SpecialType;
 import io.quarkus.arc.processor.bcextensions.ExtensionsEntryPoint;
 import io.quarkus.gizmo.BytecodeCreator;
+import io.quarkus.gizmo.MethodCreator;
+import io.quarkus.gizmo.ResultHandle;
 
 /**
  * An integrator should create a new instance of the bean processor using the convenient {@link Builder} and then invoke the
@@ -48,11 +52,16 @@ import io.quarkus.gizmo.BytecodeCreator;
  * <li>{@link #registerCustomContexts()}</li>
  * <li>{@link #registerScopes()}</li>
  * <li>{@link #registerBeans()}</li>
- * <li>{@link #initialize(Consumer)}</li>
+ * <li>{@link #registerSyntheticInjectionPoints(io.quarkus.arc.processor.BeanRegistrar.RegistrationContext)}</li>
+ * <li>{@link BeanDeployment#initBeanByTypeMap()}</li>
+ * <li>{@link #registerSyntheticObservers()}</li>
+ * <li>{@link #initialize(Consumer, List)}</li>
  * <li>{@link #validate(Consumer)}</li>
  * <li>{@link #processValidationErrors(io.quarkus.arc.processor.BeanDeploymentValidator.ValidationContext)}</li>
- * <li>{@link #generateResources(ReflectionRegistration, Set, Consumer)}</li>
+ * <li>{@link #generateResources(ReflectionRegistration, Set, Consumer, boolean, ExecutorService)}</li>
  * </ol>
+ *
+ * @see #process()
  */
 public class BeanProcessor {
 
@@ -146,6 +155,15 @@ public class BeanProcessor {
         return beanDeployment.registerBeans(beanRegistrars);
     }
 
+    /**
+     * Register synthetic injection points from all synthetic beans.
+     *
+     * @param context
+     */
+    public void registerSyntheticInjectionPoints(BeanRegistrar.RegistrationContext context) {
+        beanDeployment.registerSyntheticInjectionPoints(context);
+    }
+
     public ObserverRegistrar.RegistrationContext registerSyntheticObservers() {
         return beanDeployment.registerSyntheticObservers(observerRegistrars);
     }
@@ -185,6 +203,8 @@ public class BeanProcessor {
             ExecutorService executor)
             throws IOException, InterruptedException, ExecutionException {
 
+        beanDeployment.resourceGenerationStarted();
+
         ReflectionRegistration refReg = reflectionRegistration != null ? reflectionRegistration : this.reflectionRegistration;
         PrivateMembersCollector privateMembers = new PrivateMembersCollector();
         boolean optimizeContextsValue = optimizeContexts != null ? optimizeContexts.test(beanDeployment) : false;
@@ -218,7 +238,6 @@ public class BeanProcessor {
         for (InterceptorInfo interceptor : interceptors) {
             interceptorGenerator.precomputeGeneratedName(interceptor);
         }
-        interceptors.forEach(interceptorGenerator::precomputeGeneratedName);
 
         DecoratorGenerator decoratorGenerator = new DecoratorGenerator(annotationLiterals, applicationClassPredicate,
                 privateMembers, generateSources, refReg, existingClasses, beanToGeneratedName,
@@ -245,6 +264,17 @@ public class BeanProcessor {
             contextInstancesGenerator.precomputeGeneratedName(BuiltinScope.APPLICATION.getName());
             contextInstancesGenerator.precomputeGeneratedName(BuiltinScope.REQUEST.getName());
         }
+
+        InvokerGenerator invokerGenerator = new InvokerGenerator(generateSources,
+                applicationClassPredicate, beanDeployment, annotationLiterals, reflectionRegistration,
+                injectionPointAnnotationsPredicate);
+        Collection<InvokerInfo> invokers = beanDeployment.getInvokers();
+
+        // this is different to `SubclassGenerator` in that it generates support classes
+        // for interception of producer methods and synthetic beans and only supports
+        // limited form of interception (and no decoration)
+        InterceptionProxyGenerator interceptionGenerator = new InterceptionProxyGenerator(generateSources,
+                applicationClassPredicate, beanDeployment, annotationLiterals, reflectionRegistration);
 
         List<Resource> resources = new ArrayList<>();
 
@@ -338,6 +368,24 @@ public class BeanProcessor {
                                         }
                                     }));
                                 }
+
+                                if (bean.getInterceptionProxy() != null) {
+                                    secondaryTasks.add(executor.submit(new Callable<Collection<Resource>>() {
+                                        @Override
+                                        public Collection<Resource> call() throws Exception {
+                                            Collection<Resource> interceptionResources = interceptionGenerator.generate(bean,
+                                                    bytecodeTransformerConsumer, transformUnproxyableClasses);
+                                            for (Resource r : interceptionResources) {
+                                                if (r.getSpecialType() == SpecialType.SUBCLASS) {
+                                                    refReg.registerSubclass(bean.getInterceptionProxy().getTargetClass(),
+                                                            r.getFullyQualifiedName());
+                                                    break;
+                                                }
+                                            }
+                                            return interceptionResources;
+                                        }
+                                    }));
+                                }
                             }
                         }
                         return beanResources;
@@ -351,6 +399,16 @@ public class BeanProcessor {
                     @Override
                     public Collection<Resource> call() throws Exception {
                         return observerGenerator.generate(observer);
+                    }
+                }));
+            }
+
+            // Generate invokers
+            for (InvokerInfo invoker : invokers) {
+                primaryTasks.add(executor.submit(new Callable<Collection<Resource>>() {
+                    @Override
+                    public Collection<Resource> call() throws Exception {
+                        return invokerGenerator.generate(invoker);
                     }
                 }));
             }
@@ -429,12 +487,28 @@ public class BeanProcessor {
                             }
                             resources.addAll(subclassResources);
                         }
+                        if (bean.getInterceptionProxy() != null) {
+                            Collection<Resource> interceptionResources = interceptionGenerator.generate(bean,
+                                    bytecodeTransformerConsumer, transformUnproxyableClasses);
+                            for (Resource r : interceptionResources) {
+                                if (r.getSpecialType() == SpecialType.SUBCLASS) {
+                                    refReg.registerSubclass(bean.getInterceptionProxy().getTargetClass(),
+                                            r.getFullyQualifiedName());
+                                    break;
+                                }
+                            }
+                            resources.addAll(interceptionResources);
+                        }
                     }
                 }
             }
             // Generate observers
             for (ObserverInfo observer : observers) {
                 resources.addAll(observerGenerator.generate(observer));
+            }
+            // Generate invokers
+            for (InvokerInfo invoker : invokers) {
+                resources.addAll(invokerGenerator.generate(invoker));
             }
 
             // Generate `_InjectableContext` subclasses for custom `AlterableContext`s
@@ -499,13 +573,15 @@ public class BeanProcessor {
         };
         registerCustomContexts();
         registerScopes();
-        registerBeans();
+        RegistrationContext registrationContext = registerBeans();
+        registerSyntheticInjectionPoints(registrationContext);
         beanDeployment.initBeanByTypeMap();
         registerSyntheticObservers();
         initialize(unsupportedBytecodeTransformer, Collections.emptyList());
         ValidationContext validationContext = validate(unsupportedBytecodeTransformer);
         processValidationErrors(validationContext);
-        generateResources(null, new HashSet<>(), unsupportedBytecodeTransformer, beanDeployment.removeUnusedBeans, null);
+        generateResources(ReflectionRegistration.NOOP, new HashSet<>(), unsupportedBytecodeTransformer,
+                beanDeployment.removeUnusedBeans, null);
         return beanDeployment;
     }
 
@@ -517,13 +593,15 @@ public class BeanProcessor {
         Map<DotName, Integer> contextsForScope = new HashMap<>();
         // built-in contexts
         contextsForScope.put(BuiltinScope.REQUEST.getName(), 1);
+        contextsForScope.put(BuiltinScope.SESSION.getName(), 1);
         // custom contexts
-        beanDeployment.getCustomContexts()
-                .keySet()
-                .stream()
-                .filter(ScopeInfo::isNormal)
-                .map(ScopeInfo::getDotName)
-                .forEach(scope -> contextsForScope.merge(scope, 1, Integer::sum));
+        for (Map.Entry<ScopeInfo, List<Function<MethodCreator, ResultHandle>>> entry : beanDeployment
+                .getCustomContexts()
+                .entrySet()) {
+            if (entry.getKey().isNormal()) {
+                contextsForScope.merge(entry.getKey().getDotName(), entry.getValue().size(), Integer::sum);
+            }
+        }
 
         return contextsForScope.entrySet()
                 .stream()
@@ -543,7 +621,7 @@ public class BeanProcessor {
         ReflectionRegistration reflectionRegistration;
 
         final List<DotName> resourceAnnotations;
-        final List<AnnotationsTransformer> annotationTransformers;
+        final List<AnnotationTransformation> annotationTransformers;
         final List<InjectionPointsTransformer> injectionPointTransformers;
         final List<ObserverTransformer> observerTransformers;
         final List<BeanRegistrar> beanRegistrars;
@@ -688,8 +766,17 @@ public class BeanProcessor {
             return this;
         }
 
+        /**
+         * @deprecated use {@link #addAnnotationTransformation(AnnotationTransformation)}
+         */
+        @Deprecated(forRemoval = true)
         public Builder addAnnotationTransformer(AnnotationsTransformer transformer) {
             this.annotationTransformers.add(transformer);
+            return this;
+        }
+
+        public Builder addAnnotationTransformation(AnnotationTransformation transformation) {
+            this.annotationTransformers.add(transformation);
             return this;
         }
 
@@ -753,7 +840,8 @@ public class BeanProcessor {
          * <li>does not have a name,</li>
          * <li>does not declare an observer,</li>
          * <li>does not declare any producer which is eligible for injection to any injection point,</li>
-         * <li>is not directly eligible for injection into any {@link jakarta.enterprise.inject.Instance} injection point</li>
+         * <li>is not directly eligible for injection into any {@link jakarta.enterprise.inject.Instance} injection point,</li>
+         * <li>is not a result of resolving an invoker lookup</li>
          * </ul>
          *
          * @param removeUnusedBeans

@@ -246,12 +246,17 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
         if (requestScopeActivated) {
             return;
         }
-        requestScopeActivated = true;
         if (isRequestScopeManagementRequired()) {
-            if (currentRequestScope == null) {
-                currentRequestScope = requestContext.activateInitial();
+            if (requestContext.isRequestContextActive()) {
+                // req. context is already active, just reuse existing one
+                currentRequestScope = requestContext.currentState();
             } else {
-                currentRequestScope.activate();
+                requestScopeActivated = true;
+                if (currentRequestScope == null) {
+                    currentRequestScope = requestContext.activateInitial();
+                } else {
+                    currentRequestScope.activate();
+                }
             }
         } else {
             currentRequestScope = requestContext.currentState();
@@ -325,9 +330,9 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
         } else {
             this.throwable = unwrapException(t);
             if (t instanceof WebApplicationException) {
-                logWebApplicationExceptions.debug("Restarting handler chain for exception exception", this.throwable);
+                logWebApplicationExceptions.trace("Restarting handler chain for exception exception", this.throwable);
             } else {
-                log.debug("Restarting handler chain for exception exception", this.throwable);
+                log.trace("Restarting handler chain for exception exception", this.throwable);
             }
             abortHandlerChainStarted = true;
             restart(abortHandlerChain, keepSameTarget);

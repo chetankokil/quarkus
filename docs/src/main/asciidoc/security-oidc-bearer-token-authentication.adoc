@@ -48,7 +48,8 @@ If you need to authenticate and authorize users by using OIDC authorization code
 Also, if you use Keycloak and bearer tokens, see the Quarkus xref:security-keycloak-authorization.adoc[Using Keycloak to centralize authorization] guide.
 
 To learn about how you can protect service applications by using OIDC Bearer token authentication, see the following tutorial:
-* xref:security-oidc-bearer-token-authentication-tutorial.adoc[Protect a web application by using OpenID Connect (OIDC) authorization code flow].
+
+* xref:security-oidc-bearer-token-authentication-tutorial.adoc[Protect a service application by using OpenID Connect (OIDC) Bearer token authentication].
 
 For information about how to support multiple tenants, see the Quarkus xref:security-openid-connect-multitenancy.adoc[Using OpenID Connect Multi-Tenancy] guide.
 
@@ -88,14 +89,20 @@ Injection of `JsonWebToken` is supported in `@ApplicationScoped`, `@Singleton`, 
 However, the use of `@RequestScoped` is required if the individual claims are injected as simple types.
 For more information, see the xref:security-jwt.adoc#supported-injection-scopes[Supported injection scopes] section of the Quarkus "Using JWT RBAC" guide.
 
-[[user-info]]
+[[bearer-token-user-info]]
 === `UserInfo`
 
 If you must request a UserInfo JSON object from the OIDC `UserInfo` endpoint, set `quarkus.oidc.authentication.user-info-required=true`.
 A request is sent to the OIDC provider `UserInfo` endpoint, and an `io.quarkus.oidc.UserInfo` (a simple `javax.json.JsonObject` wrapper) object is created.
 `io.quarkus.oidc.UserInfo` can be injected or accessed as a `SecurityIdentity` `userinfo` attribute.
 
-[[config-metadata]]
+`quarkus.oidc.authentication.user-info-required` is automatically enabled if one of these conditions is met:
+
+- if `quarkus.oidc.roles.source` is set to `userinfo` or `quarkus.oidc.token.verify-access-token-with-user-info` is set to `true` or `quarkus.oidc.authentication.id-token-required` is set to `false`, the current OIDC tenant must support a UserInfo endpoint in these cases.
+
+- if `io.quarkus.oidc.UserInfo` injection point is detected but only if the current OIDC tenant supports a UserInfo endpoint.
+
+[[bearer-token-config-metadata]]
 === Configuration metadata
 
 The current tenant's discovered link:https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata[OpenID Connect Configuration Metadata] is represented by `io.quarkus.oidc.OidcConfigurationMetadata` and can be injected or accessed as a `SecurityIdentity` `configuration-metadata` attribute.
@@ -177,7 +184,7 @@ public class ProtectedResource {
     @GET
     @Path("/order")
     public List<Order> listOrders() {
-        return List.of(new Order(1));
+        return List.of(new Order("1"));
     }
 
     public static class Order {
@@ -201,7 +208,7 @@ public class ProtectedResource {
 
 For more information about the `io.quarkus.security.PermissionsAllowed` annotation, see the xref:security-authorize-web-endpoints-reference.adoc#permission-annotation[Permission annotation] section of the "Authorization of web endpoints" guide.
 
-[[token-verification-introspection]]
+[[bearer-token-token-verification-introspection]]
 === Token verification and introspection
 
 If the token is a JWT token, then, by default, it is verified with a `JsonWebKey` (JWK) key from a local `JsonWebKeySet`, retrieved from the OIDC provider's JWK endpoint.
@@ -250,7 +257,7 @@ A disadvantage is that a remote OIDC metadata discovery call is required to disc
 The `io.quarkus.oidc.TokenIntrospection`, a simple `jakarta.json.JsonObject` wrapper object, will be created.
 It can be injected or accessed as a `SecurityIdentity` `introspection` attribute, providing either the JWT or opaque token has been successfully introspected.
 
-[[token-introspection-userinfo-cache]]
+[[bearer-token-token-introspection-userinfo-cache]]
 === Token introspection and `UserInfo` cache
 
 All opaque access tokens must be remotely introspected.
@@ -299,7 +306,7 @@ Additionally, the cleanup timer, if activated, periodically checks for expired e
 
 You can experiment with the default cache implementation or register a custom one.
 
-[[jwt-claim-verification]]
+[[bearer-token-jwt-claim-verification]]
 === JSON Web Token claim verification
 
 After the bearer JWT token's signature has been verified and its `expires at` (`exp`) claim has been checked, the `iss` (`issuer`) claim value is verified next.
@@ -352,6 +359,45 @@ public class IssuerValidator implements ContainerRequestFilter {
 Consider using the `quarkus.oidc.token.audience` property to verify the token `aud` (`audience`) claim value.
 ====
 
+[[jose4j-validator-bearer]]
+=== Jose4j Validator
+
+You can register a custom https://www.javadoc.io/doc/org.bitbucket.b_c/jose4j/latest/org/jose4j/jwt/consumer/class-use/Validator.html[Jose4j Validator] to customize the JWT claim verification process, before `org.eclipse.microprofile.jwt.JsonWebToken` is initialized.
+For example:
+
+[source, java]
+----
+package org.acme.security.openid.connect;
+
+import static org.eclipse.microprofile.jwt.Claims.iss;
+
+import io.quarkus.arc.Unremovable;
+import jakarta.enterprise.context.ApplicationScoped;
+
+import org.jose4j.jwt.MalformedClaimException;
+import org.jose4j.jwt.consumer.JwtContext;
+import org.jose4j.jwt.consumer.Validator;
+
+@Unremovable
+@ApplicationScoped
+public class IssuerValidator implements Validator { <1>
+
+    @Override
+    public String validate(JwtContext jwtContext) throws MalformedClaimException {
+        if (jwtContext.getJwtClaims().hasClaim(iss.name())
+                && "my-issuer".equals(jwtContext.getJwtClaims().getClaimValueAsString(iss.name()))) {
+            return "wrong issuer"; <2>
+        }
+        return null; <3>
+    }
+}
+----
+<1> Register Jose4j Validator to verify JWT tokens for all OIDC tenants.
+<2> Return the claim verification error description.
+<3> Return `null` to confirm that this Validator has successfully verified the token.
+
+TIP: Use a `@quarkus.oidc.TenantFeature` annotation to bind a custom Validator to a specific OIDC tenant only.
+
 [[single-page-applications]]
 === Single-page applications
 
@@ -365,14 +411,28 @@ For example, if you work with Keycloak, you can use `keycloak.js` to authenticat
 <head>
     <title>keycloak-spa</title>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="http://localhost:8180/js/keycloak.js"></script>
-    <script>
-        var keycloak = new Keycloak();
-        keycloak.init({onLoad: 'login-required'}).success(function () {
-            console.log('User is now authenticated.');
-        }).error(function () {
-            window.location.reload();
+    <script type="importmap">
+        {
+            "imports": {
+                "keycloak-js": "https://cdn.jsdelivr.net/npm/keycloak-js@26.0.7/lib/keycloak.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import Keycloak from "keycloak-js";
+
+        const keycloak = new Keycloak({
+            url: 'http://localhost:8180',
+            realm: 'quarkus',
+            clientId: 'quarkus-app'
         });
+
+        await keycloak.init({onLoad: 'login-required'}).then(function () {
+            console.log('User is now authenticated.');
+        }).catch(function () {
+            console.log('User is NOT authenticated.');
+        });
+
         function makeAjaxRequest() {
             axios.get("/api/hello", {
                 headers: {
@@ -390,14 +450,23 @@ For example, if you work with Keycloak, you can use `keycloak.js` to authenticat
                     window.location.reload();
                 });
             });
-    }
+        }
+
+        let button = document.getElementById('ajax-request');
+        button.addEventListener('click', makeAjaxRequest);
     </script>
 </head>
 <body>
-    <button onclick="makeAjaxRequest()">Request</button>
+    <button id="ajax-request">Request</button>
 </body>
 </html>
 ----
+
+[NOTE]
+====
+To enable authentication for this SPA Keycloak example, disable *Client authentication* and set *Web origins* to `http://localhost:8080`. These settings allow Keycloak's CORS policy to communicate with your Quarkus application.
+The code provides an example of building Quarkus single-page applications integrated with Keycloak. For more details about creating single-page applications integrating Keycloak, refer to the official link:https://www.keycloak.org/securing-apps/javascript-adapter[Keycloak JavaScript adapter documentation].
+====
 
 === Cross-origin resource sharing
 
@@ -429,7 +498,67 @@ quarkus.oidc.introspection-path=/protocol/openid-connect/tokens/introspect
 
 === Token propagation
 
-For information about bearer access token propagation to the downstream services, see the xref:security-openid-connect-client-reference.adoc#token-propagation[Token propagation] section of the Quarkus "OpenID Connect (OIDC) and OAuth2 client and filters reference" guide.
+For information about bearer access token propagation to the downstream services, see the xref:security-openid-connect-client-reference.adoc#token-propagation-rest[Token propagation] section of the Quarkus "OpenID Connect (OIDC) and OAuth2 client and filters reference" guide.
+
+=== JWT token certificate chain
+
+In some cases, JWT bearer tokens have an `x5c` header which represents an X509 certificate chain whose leaf certificate contains a public key that must be used to verify this token's signature.
+Before this public key can be accepted to verify the signature, the certificate chain must be validated first.
+The certificate chain validation involves several steps:
+
+1. Confirm that every certificate but the root one is signed by the parent certificate.
+
+2. Confirm the chain's root certificate is also imported in the truststore.
+
+3. Validate the chain's leaf certificate. If a common name of the leaf certificate is configured then a common name of the chain's leaf certificate must match it. Otherwise the chain's leaf certificate must also be avaiable in the truststore, unless one or more custom `TokenCertificateValidator` implementations are registered.
+
+4. `quarkus.oidc.TokenCertificateValidator` can be used to add a custom certificate chain validation step. It can be used by all tenants expecting tokens with the certificate chain or bound to specific OIDC tenants with the `@quarkus.oidc.TenantFeature` annotation.
+
+For example, here is how you can configure Quarkus OIDC to verify the token's certificate chain, without using `quarkus.oidc.TokenCertificateValidator`:
+
+[source,properties]
+----
+quarkus.oidc.certificate-chain.trust-store-file=truststore-rootcert.p12 <1>
+quarkus.oidc.certificate-chain.trust-store-password=storepassword
+quarkus.oidc.certificate-chain.leaf-certificate-name=www.quarkusio.com <2>
+----
+<1> The truststore must contain the certificate chain's root certificate.
+<2> The certificate chain's leaf certificate must have a common name equal to `www.quarkusio.com`. If this property is not configured then the truststore must contain the certificate chain's leaf certificate unless one or more custom `TokenCertificateValidator` implementations are registered.
+
+You can add a custom certificate chain validation step by registering a custom `quarkus.oidc.TokenCertificateValidator`, for example:
+
+[source,java]
+----
+package io.quarkus.it.keycloak;
+
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.util.List;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+import io.quarkus.arc.Unremovable;
+import io.quarkus.oidc.OidcTenantConfig;
+import io.quarkus.oidc.TokenCertificateValidator;
+import io.quarkus.oidc.runtime.TrustStoreUtils;
+import io.vertx.core.json.JsonObject;
+
+@ApplicationScoped
+@Unremovable
+public class BearerGlobalTokenChainValidator implements TokenCertificateValidator {
+
+    @Override
+    public void validate(OidcTenantConfig oidcConfig, List<X509Certificate> chain, String tokenClaims) throws CertificateException {
+        String rootCertificateThumbprint = TrustStoreUtils.calculateThumprint(chain.get(chain.size() - 1));
+        JsonObject claims = new JsonObject(tokenClaims);
+        if (!rootCertificateThumbprint.equals(claims.getString("root-certificate-thumbprint"))) { <1>
+            throw new CertificateException("Invalid root certificate");
+        }
+    }
+}
+
+----
+<1> Confirm that the certificate chain's root certificate is bound to the custom JWT token's claim.
 
 === OIDC provider client authentication
 
@@ -437,7 +566,7 @@ For information about bearer access token propagation to the downstream services
 If introspection of the Bearer token is necessary, then `OidcProviderClient` must authenticate to the OIDC provider.
 For more information about supported authentication options, see the  xref:security-oidc-code-flow-authentication.adoc#oidc-provider-client-authentication[OIDC provider client authentication] section in the Quarkus "OpenID Connect authorization code flow mechanism for protecting web applications" guide.
 
-[[integration-testing]]
+[[bearer-token-integration-testing]]
 === Testing
 
 [NOTE]
@@ -469,7 +598,102 @@ testImplementation("io.rest-assured:rest-assured")
 testImplementation("io.quarkus:quarkus-junit5")
 ----
 
-[[integration-testing-wiremock]]
+[[bearer-token-integration-testing-keycloak-devservices]]
+==== Dev Services for Keycloak
+
+The preferred approach for integration testing against Keycloak is xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak].
+`Dev Services for Keycloak` will start and initialize a test container.
+Then, it will create a `quarkus` realm and a `quarkus-app` client (`secret` secret) and add `alice` (`admin` and `user` roles) and `bob` (`user` role) users, where all of these properties can be customized.
+
+First, add the following dependency, which provides a utility class `io.quarkus.test.keycloak.client.KeycloakTestClient` that you can use in tests for acquiring the access tokens:
+
+[source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
+.pom.xml
+----
+<dependency>
+    <groupId>io.quarkus</groupId>
+    <artifactId>quarkus-test-keycloak-server</artifactId>
+    <scope>test</scope>
+</dependency>
+----
+
+[source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
+.build.gradle
+----
+testImplementation("io.quarkus:quarkus-test-keycloak-server")
+----
+
+Next, prepare your `application.properties` configuration file.
+You can start with an empty `application.properties` file because `Dev Services for Keycloak` registers `quarkus.oidc.auth-server-url` and points it to the running test container, `quarkus.oidc.client-id=quarkus-app`, and `quarkus.oidc.credentials.secret=secret`.
+
+However, if you have already configured the required `quarkus-oidc` properties, then you only need to associate `quarkus.oidc.auth-server-url` with the `prod` profile for `Dev Services for Keycloak`to start a container, as shown in the following example:
+
+[source,properties]
+----
+%prod.quarkus.oidc.auth-server-url=http://localhost:8180/realms/quarkus
+----
+
+If a custom realm file has to be imported into Keycloak before running the tests, configure `Dev Services for Keycloak` as follows:
+
+[source,properties]
+----
+%prod.quarkus.oidc.auth-server-url=http://localhost:8180/realms/quarkus
+quarkus.keycloak.devservices.realm-path=quarkus-realm.json
+----
+
+Finally, write your test, which will be executed in JVM mode, as shown in the following examples:
+
+.Example of a test executed in JVM mode:
+
+[source,java]
+----
+package org.acme.security.openid.connect;
+
+import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.keycloak.client.KeycloakTestClient;
+import io.restassured.RestAssured;
+import org.junit.jupiter.api.Test;
+
+@QuarkusTest
+public class BearerTokenAuthenticationTest {
+
+    KeycloakTestClient keycloakClient = new KeycloakTestClient();
+
+    @Test
+    public void testAdminAccess() {
+        RestAssured.given().auth().oauth2(getAccessToken("alice"))
+                .when().get("/api/admin")
+                .then()
+                .statusCode(200);
+        RestAssured.given().auth().oauth2(getAccessToken("bob"))
+                .when().get("/api/admin")
+                .then()
+                .statusCode(403);
+    }
+
+    protected String getAccessToken(String userName) {
+        return keycloakClient.getAccessToken(userName);
+    }
+}
+----
+
+.Example of a test executed in native mode:
+
+[source,java]
+----
+package org.acme.security.openid.connect;
+
+import io.quarkus.test.junit.QuarkusIntegrationTest;
+
+@QuarkusIntegrationTest
+public class NativeBearerTokenAuthenticationIT extends BearerTokenAuthenticationTest {
+}
+----
+
+For more information about initializing and configuring Dev Services for Keycloak, see the xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak] guide.
+
+
+[[bearer-token-integration-testing-wiremock]]
 ==== WireMock
 
 Add the following dependencies to your test project:
@@ -496,7 +720,7 @@ For example:
 [source, properties]
 ----
 # keycloak.url is set by OidcWiremockTestResource
-quarkus.oidc.auth-server-url=${keycloak.url}/realms/quarkus/
+quarkus.oidc.auth-server-url=${keycloak.url:replaced-by-test-resource}/realms/quarkus/
 quarkus.oidc.client-id=quarkus-service-app
 quarkus.oidc.application-type=service
 ----
@@ -591,7 +815,7 @@ public class CustomOidcWireMockStubTest {
 ----
 
 [[integration-testing-oidc-test-client]]
-=== `OidcTestClient`
+==== `OidcTestClient`
 
 If you use SaaS OIDC providers, such as `Auth0`, and want to run tests against the test (development) domain or to run tests against a remote Keycloak test realm, if you already have `quarkus.oidc.auth-server-url` configured, you can use `OidcTestClient`.
 
@@ -604,7 +828,7 @@ For example, you have the following configuration:
 %test.quarkus.oidc.credentials.secret=secret
 ----
 
-To start, add the same dependency, `quarkus-test-oidc-server`, as described in the <<integration-testing-wiremock>> section.
+To start, add the same dependency, `quarkus-test-oidc-server`, as described in the <<bearer-token-integration-testing-wiremock>> section.
 
 Next, write the test code as follows:
 
@@ -656,108 +880,57 @@ For a test like this to work, the test `Auth0` application must have the `passwo
 This example code also shows how to pass additional parameters.
 For `Auth0`, these are the `audience` and `scope` parameters.
 
-[[integration-testing-keycloak-devservices]]
-==== Dev Services for Keycloak
+===== Test OIDC DevService
 
-The preferred approach for integration testing against Keycloak is xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak].
-`Dev Services for Keycloak` will start and initialize a test container.
-Then, it will create a `quarkus` realm and a `quarkus-app` client (`secret` secret) and add `alice` (`admin` and `user` roles) and `bob` (`user` role) users, where all of these properties can be customized.
+You can also use `OidcTestClient` to test Quarkus endpoints supported by xref:security-openid-connect-dev-services.adoc#dev-services-for-oidc[Dev Services for OIDC].
+No configuration in the `application.properties` file is needed, Quarkus will configure `OidcTestClient` for you:
 
-First, add the following dependency, which provides a utility class `io.quarkus.test.keycloak.client.KeycloakTestClient` that you can use in tests for acquiring the access tokens:
-
-[source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
-.pom.xml
+[source, java]
 ----
-<dependency>
-    <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-test-keycloak-server</artifactId>
-    <scope>test</scope>
-</dependency>
-----
+package org.acme;
 
-[source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
-.build.gradle
-----
-testImplementation("io.quarkus:quarkus-test-keycloak-server")
-----
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.CoreMatchers.is;
 
-Next, prepare your `application.properties` configuration file.
-You can start with an empty `application.properties` file because `Dev Services for Keycloak` registers `quarkus.oidc.auth-server-url` and points it to the running test container, `quarkus.oidc.client-id=quarkus-app`, and `quarkus.oidc.credentials.secret=secret`.
-
-However, if you have already configured the required `quarkus-oidc` properties, then you only need to associate `quarkus.oidc.auth-server-url` with the `prod` profile for `Dev Services for Keycloak`to start a container, as shown in the following example:
-
-[source,properties]
-----
-%prod.quarkus.oidc.auth-server-url=http://localhost:8180/realms/quarkus
-----
-
-If a custom realm file has to be imported into Keycloak before running the tests, configure `Dev Services for Keycloak` as follows:
-
-[source,properties]
-----
-%prod.quarkus.oidc.auth-server-url=http://localhost:8180/realms/quarkus
-quarkus.keycloak.devservices.realm-path=quarkus-realm.json
-----
-
-Finally, write your test, which will be executed in JVM mode, as shown in the following examples:
-
-.Example of a test executed in JVM mode:
-
-[source,java]
-----
-package org.acme.security.openid.connect;
-
-import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.keycloak.client.KeycloakTestClient;
-import io.restassured.RestAssured;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
-@QuarkusTest
-public class BearerTokenAuthenticationTest {
+import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.oidc.client.OidcTestClient;
 
-    KeycloakTestClient keycloakClient = new KeycloakTestClient();
+@QuarkusTest
+public class GreetingResourceTest {
+
+    static final OidcTestClient oidcTestClient = new OidcTestClient();
+
+    @AfterAll
+    public static void close() {
+        oidcTestClient.close();
+    }
 
     @Test
-    public void testAdminAccess() {
-        RestAssured.given().auth().oauth2(getAccessToken("alice"))
-                .when().get("/api/admin")
-                .then()
-                .statusCode(200);
-        RestAssured.given().auth().oauth2(getAccessToken("bob"))
-                .when().get("/api/admin")
-                .then()
-                .statusCode(403);
+    public void testHelloEndpoint() {
+        String accessToken = oidcTestClient.getAccessToken("alice", "alice");
+        given()
+          .auth().oauth2(accessToken)
+          .when().get("/hello")
+          .then()
+             .statusCode(200)
+             .body(is("Hello, Alice"));
     }
 
-    protected String getAccessToken(String userName) {
-        return keycloakClient.getAccessToken(userName);
-    }
 }
 ----
 
-.Example of a test executed in native mode:
-
-[source,java]
-----
-package org.acme.security.openid.connect;
-
-import io.quarkus.test.junit.QuarkusIntegrationTest;
-
-@QuarkusIntegrationTest
-public class NativeBearerTokenAuthenticationIT extends BearerTokenAuthenticationTest {
-}
-----
-
-For more information about initializing and configuring Dev Services for Keycloak, see the xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak] guide.
-
-[[integration-testing-keycloak]]
+ifndef::no-deprecated-test-resource[]
+[[bearer-token-integration-testing-keycloak]]
 ==== `KeycloakTestResourceLifecycleManager`
 
 You can also use `KeycloakTestResourceLifecycleManager` for integration testing with Keycloak.
 
 [IMPORTANT]
 ====
-Use <<integration-testing-keycloak-devservices,Dev Services for Keycloak>> instead of `KeycloakTestResourceLifecycleManager` for integration testing with Keycloak, unless you have specific requirements for using `KeycloakTestResourceLifecycleManager`.
+Use <<bearer-token-integration-testing-keycloak-devservices,Dev Services for Keycloak>> instead of `KeycloakTestResourceLifecycleManager` for integration testing with Keycloak, unless you have specific requirements for using `KeycloakTestResourceLifecycleManager`.
 ====
 
 First, add the following dependency:
@@ -804,7 +977,7 @@ Prepare the REST test endpoint and set `application.properties` as outlined in t
 [source, properties]
 ----
 # keycloak.url is set by KeycloakTestResourceLifecycleManager
-quarkus.oidc.auth-server-url=${keycloak.url}/realms/quarkus/
+quarkus.oidc.auth-server-url=${keycloak.url:replaced-by-test-resource}/realms/quarkus/
 quarkus.oidc.client-id=quarkus-service-app
 quarkus.oidc.credentials=secret
 quarkus.oidc.application-type=service
@@ -852,6 +1025,7 @@ By default:
 By default, `KeycloakTestResourceLifecycleManager` uses HTTPS to initialize a Keycloak instance, and this can be disabled by using `keycloak.use.https=false`.
 The default realm name is `quarkus`, and the client id is `quarkus-service-app`.
 If you want to customize these values, set the `keycloak.realm` and `keycloak.service.client` system properties.
+endif::no-deprecated-test-resource[]
 
 [[integration-testing-public-key]]
 ==== Local public key
@@ -866,13 +1040,13 @@ quarkus.oidc.public-key=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlivFI8qB4D0y
 smallrye.jwt.sign.key.location=/privateKey.pem
 ----
 
-To generate JWT tokens, copy `privateKey.pem` from the `integration-tests/oidc-tenancy` in the `main` Quarkus repository and use a test code similar to the one in the preceding <<integration-testing-wiremock>> section.
+To generate JWT tokens, copy `privateKey.pem` from the `integration-tests/oidc-tenancy` in the `main` Quarkus repository and use a test code similar to the one in the preceding <<bearer-token-integration-testing-wiremock>> section.
 You can use your own test keys, if preferred.
 
 This approach provides limited coverage compared to the WireMock approach.
 For example, the remote communication code is not covered.
 
-[[integration-testing-security-annotation]]
+[[bearer-token-integration-testing-security-annotation]]
 ==== TestSecurity annotation
 
 You can use `@TestSecurity` and `@OidcSecurity` annotations to test the `service` application endpoint code, which depends on either one, or all three, of the following injections:
@@ -911,7 +1085,6 @@ import io.quarkus.test.security.TestSecurity;
 import io.quarkus.test.security.oidc.Claim;
 import io.quarkus.test.security.oidc.ConfigMetadata;
 import io.quarkus.test.security.oidc.OidcSecurity;
-import io.quarkus.test.security.oidc.OidcConfigurationMetadata;
 import io.quarkus.test.security.oidc.UserInfo;
 import io.restassured.RestAssured;
 
@@ -1015,8 +1188,8 @@ public class TestSecurityAuthTest {
         }
     )
     public void testOidcWithClaimsUserInfoAndMetadata() {
-        RestAssured.when().get("test-security-oidc-claims-userinfo-metadata").then()
-                .body(is("userOidc:viewer:userOidc:viewer"));
+        RestAssured.when().get("test-security-oidc-opaque-token").then()
+                .body(is("userOidc:viewer:userOidc:viewer:user@gmail.com"));
     }
 
 }
@@ -1136,6 +1309,104 @@ If you set `quarkus.oidc.client-id`, but your endpoint does not require remote a
 Quarkus `web-app` applications always require the `quarkus.oidc.client-id` property.
 ====
 
+== Sender-constraining access tokens
+
+=== Demonstrating Proof of Possession (DPoP)
+
+https://datatracker.ietf.org/doc/html/rfc9449[RFC9449] describes a Demonstrating Proof of Possession (DPoP) mechanism for cryprographically binding an access token to the current client, preventing the access token loss and replay.
+
+Single page application (SPA) public clients generate DPoP proof tokens and use them to acquire and submit access tokens which are cryptograhically bound to DPoP proofs.
+
+Enabling DPoP support in Quarkus requires a single property.
+
+For example:
+
+[source,properties]
+----
+quarkus.oidc.auth-server-url=${your_oidc_provider_url}
+quarkus.oidc.token.authorization-scheme=dpop <1>
+----
+<1> Require that the access tokens are provided using HTTP `Authorization DPoP` scheme value.
+
+After accepting such tokens, Quarkus will go through the full https://datatracker.ietf.org/doc/html/rfc9449#name-checking-dpop-proofs[DPoP token verification process].
+
+Support for custom DPoP nonce providers may be offered in the future.
+
+=== Mutual TLS token binding
+
+https://datatracker.ietf.org/doc/html/rfc8705[RFC8705] describes a mechanism for binding access tokens to Mutual TLS (mTLS) client authentication certificates.
+It requires that a client certificate's SHA256 thumbprint matches a JWT token or token introspection confirmation `x5t#S256` certificate thumbprint.
+
+For example, see https://datatracker.ietf.org/doc/html/rfc8705#section-3.1[JWT Certificate Thumbprint Confirmation Method] and https://datatracker.ietf.org/doc/html/rfc8705#section-3.2[Confirmation Method for Token Introspection] sections of https://datatracker.ietf.org/doc/html/rfc8705[RFC8705].
+
+MTLS token binding supports a `holder of key` concept, and can be used to confirm that the current access token was issued to the current authenticated client who presents this token.
+
+When you use both mTLS and OIDC bearer authentication mechanisms, you can enforce that the access tokens must be certificate bound with a single property, after configuring your Quarkus endpoint and Quarkus OIDC to require the use of mTLS.
+
+For example:
+
+[source,properties]
+----
+quarkus.oidc.auth-server-url=${your_oidc_provider_url}
+quarkus.oidc.token.binding.certificate=true <1>
+quarkus.oidc.tls.tls-configuration-name=oidc-client-tls <2>
+
+quarkus.tls.oidc-client-tls.key-store.p12.path=target/certificates/oidc-client-keystore.p12 <2>
+quarkus.tls.oidc-client-tls.key-store.p12.password=password
+quarkus.tls.oidc-client-tls.trust-store.p12.path=target/certificates/oidc-client-truststore.p12
+quarkus.tls.oidc-client-tls.trust-store.p12.password=password
+
+quarkus.http.tls-configuration-name=oidc-server-mtls <3>
+quarkus.tls.oidc-server-mtls.key-store.p12.path=target/certificates/oidc-keystore.p12
+quarkus.tls.oidc-server-mtls.key-store.p12.password=password
+quarkus.tls.oidc-server-mtls.trust-store.p12.path=target/certificates/oidc-server-truststore.p12
+quarkus.tls.oidc-server-mtls.trust-store.p12.password=password
+----
+<1> Require that bearer access tokens must be bound to the client certificates.
+<2> TLS registry configuration for Quarkus OIDC be able to communicate with the OIDC provider over MTLS
+<3> TLS registry configuration requiring external clients to authenticate to the Quarkus endpoint over MTLS
+
+The above configuration is sufficient to require that OIDC bearer tokens are bound to the client certificates.
+
+Next, if you need to access both mTLS and OIDC bearer security identities, consider enabling xref:security-authentication-mechanisms.adoc#combining-authentication-mechanisms[Inclusive authentication] with `quarkus.http.auth.inclusive=true`.
+
+Now you can access both MTLS and OIDC security identities as follows:
+
+[source,java]
+----
+package io.quarkus.it.oidc;
+
+import jakarta.inject.Inject;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+
+import org.eclipse.microprofile.jwt.JsonWebToken;
+import io.quarkus.security.Authenticated;
+import io.quarkus.security.credential.CertificateCredential;
+import io.quarkus.security.identity.SecurityIdentity;
+
+@Path("/service")
+@Authenticated
+public class OidcMtlsEndpoint {
+
+    @Inject
+    SecurityIdentity mtlsIdentity; <1>
+
+    @Inject
+    JsonWebToken oidcAccessToken; <2>
+
+    @GET
+    public String getIdentities() {
+        var cred = identity.getCredential(CertificateCredential.class).getCertificate();
+        return "Identities: " + cred.getSubjectX500Principal().getName().split(",")[0]
+                + ", " + accessToken.getName();
+    }
+}
+----
+<1> `SecurityIdentity` always represents the primary mTLS authentication when mTLS is used and an inclusive authentication is enabled.
+<2> OIDC security identity is also available because enabling an inclusive authentication requires all registered mechanisms to produce the security identity.
+
+
 == Authentication after an HTTP request has completed
 
 Sometimes, `SecurityIdentity` for a given token must be created when there is no active HTTP request context.
@@ -1190,7 +1461,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import io.quarkus.oidc.AccessTokenCredential;
-import io.quarkus.oidc.TenantFeature;
+import io.quarkus.oidc.Tenant;
 import io.quarkus.oidc.TenantIdentityProvider;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.vertx.ConsumeEvent;
@@ -1199,7 +1470,7 @@ import io.smallrye.common.annotation.Blocking;
 @ApplicationScoped
 public class OrderService {
 
-    @TenantFeature("tenantId")
+    @Tenant("tenantId")
     @Inject
     TenantIdentityProvider identityProvider;
 
@@ -1208,7 +1479,7 @@ public class OrderService {
 
     @Blocking
     @ConsumeEvent("product-order")
-    void processOrder(Product product) {
+    void processOrder(OrderResource.Product product) {
         AccessTokenCredential tokenCredential = new AccessTokenCredential(product.customerAccessToken);
         SecurityIdentity securityIdentity = identityProvider.authenticate(tokenCredential).await().indefinitely(); <2>
         ...
@@ -1216,14 +1487,14 @@ public class OrderService {
 
 }
 ----
-<1> For the default tenant, the `TenantFeature` qualifier is optional.
+<1> For the default tenant, the `Tenant` qualifier is optional.
 <2> Executes token verification and converts the token to a `SecurityIdentity`.
 
 [NOTE]
 ====
 When the provider is used during an HTTP request, the tenant configuration can be resolved as described in
 the xref:security-openid-connect-multitenancy.adoc[Using OpenID Connect Multi-Tenancy] guide.
-However, when there is no active HTTP request, you must select the tenant explicitly with the `io.quarkus.oidc.TenantFeature` qualifier.
+However, when there is no active HTTP request, you must select the tenant explicitly with the `io.quarkus.oidc.Tenant` qualifier.
 ====
 
 [WARNING]
@@ -1232,24 +1503,229 @@ xref:security-openid-connect-multitenancy.adoc#tenant-config-resolver[Dynamic te
 Authentication that requires a dynamic tenant will fail.
 ====
 
-[[oidc-request-filters]]
+[[bearer-token-oidc-request-filters]]
 == OIDC request filters
 
 You can filter OIDC requests made by Quarkus to the OIDC provider by registering one or more `OidcRequestFilter` implementations, which can update or add new request headers, and log requests.
-For more information, see xref:security-oidc-code-flow-authentication#oidc-request-filters[OIDC request filters].
+For more information, see xref:security-oidc-code-flow-authentication.adoc#code-flow-oidc-request-filters[OIDC request filters].
+
+[[bearer-token-oidc-response-filters]]
+=== OIDC response filters
+
+You can filter responses from the OIDC providers by registering one or more `OidcResponseFilter` implementations, which can check the response status, headers and body in order to log them or perform other actions.
+
+You can have a single filter intercepting all the OIDC responses, or use an `@OidcEndpoint` annotation to apply this filter to the specific endpoint responses only. For example:
+
+[source,java]
+----
+package io.quarkus.it.keycloak;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+import io.quarkus.arc.Unremovable;
+import io.quarkus.logging.Log;
+import io.quarkus.oidc.common.OidcEndpoint;
+import io.quarkus.oidc.common.OidcEndpoint.Type;
+import io.quarkus.oidc.common.OidcResponseFilter;
+import io.quarkus.oidc.common.runtime.OidcConstants;
+import io.quarkus.oidc.runtime.OidcUtils;
+
+@ApplicationScoped
+@Unremovable
+@OidcEndpoint(value = Type.DISCOVERY) <1>
+public class DiscoveryEndpointResponseFilter implements OidcResponseFilter {
+
+    @Override
+    public void filter(OidcResponseContext rc) {
+        String contentType = rc.responseHeaders().get("Content-Type"); <2>
+        if (contentType.equals("application/json") {
+            String tenantId = rc.requestProperties().get(OidcUtils.TENANT_ID_ATTRIBUTE); <3>
+            String metadata = rc.responseBody().toString(); <4>
+            Log.debugf("Tenant %s OIDC metadata: %s", tenantId, metadata);
+        }
+    }
+}
+
+----
+<1> Restrict this filter to requests targeting the OIDC discovery endpoint only.
+<2> Check the response `Content-Type` header.
+<3> Use `OidcRequestContextProperties` request properties to get the tenant id.
+<4> Get the response data as String.
+
+== Programmatic OIDC start-up
+
+OIDC tenants can be created programmatically like in the example below:
+
+[source,java]
+----
+package io.quarkus.it.oidc;
+
+import io.quarkus.oidc.Oidc;
+import jakarta.enterprise.event.Observes;
+
+public class OidcStartup {
+
+    void observe(@Observes Oidc oidc) {
+        oidc.createServiceApp("http://localhost:8180/realms/quarkus");
+    }
+
+}
+----
+
+The code above is a programmatic equivalent to the following configuration in the `application.properties` file:
+
+[source,properties]
+----
+quarkus.oidc.auth-server-url=http://localhost:8180/realms/quarkus
+----
+
+Should you need to configure more OIDC tenant properties, use the `OidcTenantConfig` builder like in the example below:
+
+[source,java]
+----
+package io.quarkus.it.oidc;
+
+import io.quarkus.oidc.Oidc;
+import io.quarkus.oidc.OidcTenantConfig;
+import jakarta.enterprise.event.Observes;
+
+public class OidcStartup {
+
+    void createDefaultTenant(@Observes Oidc oidc) {
+        var defaultTenant = OidcTenantConfig
+                .authServerUrl("http://localhost:8180/realms/quarkus")
+                .token().requireJwtIntrospectionOnly().end()
+                .build();
+        oidc.create(defaultTenant);
+    }
+}
+----
+
+For more complex setup involving multiple tenants please see the xref:security-openid-connect-multitenancy.adoc#programmatic-startup[Programmatic OIDC start-up for multitenant application]
+section of the OpenID Connect Multi-Tenancy guide.
+
+== Step Up Authentication
+
+The `io.quarkus.oidc.AuthenticationContext` annotation can be used to list one or more Authentication Context Class Reference (ACR) values to enforce a required authentication level for the Jakarta REST resource classes and methods.
+The https://datatracker.ietf.org/doc/rfc9470/[OAuth 2.0 Step Up Authentication Challenge Protocol] introduces a mechanism for resource servers to request stronger authentication methods when the token does not have expected Authentication Context Class Reference (ACR) values.
+Consider the following example:
+
+[source,java]
+----
+package io.quarkus.it.oidc;
+
+import io.quarkus.oidc.AuthenticationContext;
+import io.quarkus.oidc.BearerTokenAuthentication;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+
+@BearerTokenAuthentication
+@Path("/")
+public class GreetingsResource {
+
+    @Path("hello")
+    @AuthenticationContext("myACR") <1>
+    @GET
+    public String hello() {
+        return "hello";
+    }
+
+    @Path("hi")
+    @AuthenticationContext(value = "myACR", maxAge = "PT120m") <2>
+    @GET
+    public String hi() {
+        return "hi";
+    }
+}
+----
+<1> Bearer access token must have an `acr` claim with the `myACR` ACR value.
+<2> Bearer access token must have an `acr` claim with the `myACR` ACR value and be in use for no longer than 120 minutes since the authentication time.
+
+[source,properties]
+----
+quarkus.http.auth.proactive=false <1>
+----
+<1> Disable proactive authentication so that the `@AuthenticationContext` annotation can be matched with the endpoint before Quarkus authenticates incoming requests.
+
+If the bearer access token claim `acr` does not contain `myACR`, Quarkus returns an authentication requirements challenge indicating required `acr_values`:
+
+----
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer error="insufficient_user_authentication",
+ error_description="A different authentication level is required",
+ acr_values="myACR"
+----
+
+When a client such as Single-page application (SPA) receives a challenge with the `insufficient_user_authentication` error code, it must parse `acr_values`, request a new user login which must meet the `acr_values` constraints, and use a new access token to access Quarkus.
+
+[NOTE]
+====
+The `io.quarkus.oidc.AuthenticationContext` annotation can also be used to enforce required authentication level for a WebSockets Next server endpoint.
+The annotation must be placed on the endpoint class, because the `SecurityIdentity` is created before the HTTP connection is upgraded to a WebSocket connection.
+For more information about the HTTP upgrade security, see the xref:websockets-next-reference.adoc#secure-http-upgrade[Secure HTTP upgrade] section of the Quarkus "WebSockets Next reference" guide.
+====
+
+It is also possible to enforce the required authentication level for an OIDC tenant:
+
+[source,properties]
+----
+quarkus.oidc.hr.token.required-claims.acr=myACR
+----
+
+Or, if you need more flexibility, write a <<jose4j-validator-bearer>>:
+
+[source,java]
+----
+package io.quarkus.it.oidc;
+
+import java.util.Map;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+import org.jose4j.jwt.MalformedClaimException;
+import org.jose4j.jwt.consumer.JwtContext;
+import org.jose4j.jwt.consumer.Validator;
+
+import io.quarkus.arc.Unremovable;
+import io.quarkus.oidc.TenantFeature;
+import io.quarkus.oidc.common.runtime.OidcConstants;
+import io.quarkus.security.AuthenticationFailedException;
+
+@Unremovable
+@ApplicationScoped
+@TenantFeature("hr")
+public class AcrValueValidator implements Validator {
+
+    @Override
+    public String validate(JwtContext jwtContext) throws MalformedClaimException {
+        var jwtClaims = jwtContext.getJwtClaims();
+        if (jwtClaims.hasClaim("acr")) {
+            var acrClaim = jwtClaims.getStringListClaimValue("acr");
+            if (acrClaim.contains("myACR") && acrClaim.contains("yourACR")) {
+                return null;
+            }
+        }
+        String requiredAcrValues = "myACR,yourACR";
+        throw new AuthenticationFailedException(Map.of(OidcConstants.ACR_VALUES, requiredAcrValues));
+    }
+}
+----
 
 == References
 
 * xref:security-oidc-configuration-properties-reference.adoc[OIDC configuration properties]
+* xref:security-oidc-expanded-configuration.adoc[Expanded OIDC Configuration Reference]
 * xref:security-oidc-bearer-token-authentication-tutorial.adoc[Protect a service application by using OIDC Bearer token authentication]
-* link:https://www.keycloak.org/documentation.html[Keycloak documentation]
-* link:https://openid.net/connect/[OpenID Connect]
-* link:https://tools.ietf.org/html/rfc7519[JSON Web Token]
 * xref:security-openid-connect-client-reference.adoc[OpenID Connect and OAuth2 client and filters reference guide]
 * xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak]
 * xref:security-jwt-build.adoc[Sign and encrypt JWT tokens with SmallRye JWT Build]
 * xref:security-authentication-mechanisms.adoc#oidc-jwt-oauth2-comparison[Choosing between OpenID Connect, SmallRye JWT, and OAuth2 authentication mechanisms]
 * xref:security-authentication-mechanisms.adoc#combining-authentication-mechanisms[Combining authentication mechanisms]
 * xref:security-overview.adoc[Quarkus Security overview]
+ifndef::no-quarkus-keycloak-admin-client[]
 * xref:security-keycloak-admin-client.adoc[Quarkus Keycloak Admin Client]
+endif::no-quarkus-keycloak-admin-client[]
 * xref:security-openid-connect-multitenancy.adoc[Using OpenID Connect Multi-Tenancy]
+* link:https://www.keycloak.org/documentation.html[Keycloak documentation]
+* link:https://openid.net/connect/[OpenID Connect]
+* link:https://tools.ietf.org/html/rfc7519[JSON Web Token]

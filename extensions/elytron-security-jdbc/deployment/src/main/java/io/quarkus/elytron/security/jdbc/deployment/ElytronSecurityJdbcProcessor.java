@@ -17,7 +17,6 @@ import io.quarkus.elytron.security.deployment.ElytronPasswordMarkerBuildItem;
 import io.quarkus.elytron.security.deployment.SecurityRealmBuildItem;
 import io.quarkus.elytron.security.jdbc.JdbcRecorder;
 import io.quarkus.elytron.security.jdbc.JdbcSecurityRealmBuildTimeConfig;
-import io.quarkus.elytron.security.jdbc.JdbcSecurityRealmRuntimeConfig;
 import io.quarkus.runtime.RuntimeValue;
 
 class ElytronSecurityJdbcProcessor {
@@ -44,21 +43,20 @@ class ElytronSecurityJdbcProcessor {
     @Record(ExecutionTime.RUNTIME_INIT)
     void configureJdbcRealmAuthConfig(JdbcRecorder recorder,
             JdbcSecurityRealmBuildTimeConfig jdbcSecurityRealmBuildTimeConfig,
-            JdbcSecurityRealmRuntimeConfig jdbcSecurityRealmRuntimeConfig,
             BuildProducer<SecurityRealmBuildItem> securityRealm,
             BeanContainerBuildItem beanContainerBuildItem, //we need this to make sure ArC is initialized
-            List<JdbcDataSourceBuildItem> dataSourcesConfigured) throws Exception {
-        if (!jdbcSecurityRealmBuildTimeConfig.enabled) {
+            List<JdbcDataSourceBuildItem> dataSourcesConfigured) {
+        if (!jdbcSecurityRealmBuildTimeConfig.enabled()) {
             return;
         }
 
-        RuntimeValue<SecurityRealm> realm = recorder.createRealm(jdbcSecurityRealmRuntimeConfig);
-        securityRealm.produce(new SecurityRealmBuildItem(realm, jdbcSecurityRealmBuildTimeConfig.realmName, null));
+        RuntimeValue<SecurityRealm> realm = recorder.createRealm();
+        securityRealm.produce(new SecurityRealmBuildItem(realm, jdbcSecurityRealmBuildTimeConfig.realmName(), null));
     }
 
     @BuildStep
     ElytronPasswordMarkerBuildItem marker(JdbcSecurityRealmBuildTimeConfig jdbcSecurityRealmBuildTimeConfig) {
-        if (!jdbcSecurityRealmBuildTimeConfig.enabled) {
+        if (!jdbcSecurityRealmBuildTimeConfig.enabled()) {
             return null;
         }
         return new ElytronPasswordMarkerBuildItem();

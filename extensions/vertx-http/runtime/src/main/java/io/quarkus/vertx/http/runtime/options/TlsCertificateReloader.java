@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -16,6 +17,8 @@ import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.tls.TlsConfiguration;
+import io.quarkus.tls.TlsConfigurationRegistry;
 import io.quarkus.vertx.http.runtime.ServerSslConfig;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -40,42 +43,75 @@ public class TlsCertificateReloader {
 
     private static final Logger LOGGER = Logger.getLogger(TlsCertificateReloader.class);
 
+    /**
+     * @throws IllegalArgumentException if any of the configuration is invalid
+     */
     public static long initCertReloadingAction(Vertx vertx, HttpServer server,
-            HttpServerOptions options, ServerSslConfig configuration) {
+            HttpServerOptions options, ServerSslConfig sslConfig,
+            TlsConfigurationRegistry registry, Optional<String> tlsConfigurationName) {
 
         if (options == null) {
             throw new IllegalArgumentException("Unable to configure TLS reloading - The HTTP server options were not provided");
         }
-        SSLOptions ssl = options.getSslOptions();
-        if (ssl == null) {
-            throw new IllegalArgumentException("Unable to configure TLS reloading - TLS/SSL is not enabled on the server");
+
+        boolean useRegistry = false;
+        if (tlsConfigurationName.isPresent()) {
+            useRegistry = true;
+        } else if (registry.getDefault().isPresent() && registry.getDefault().get().getKeyStoreOptions() != null) {
+            useRegistry = true;
+        }
+
+        SSLOptions ssl = null;
+        TlsConfiguration tlsConfiguration = null;
+        if (!useRegistry) {
+            ssl = options.getSslOptions();
+            if (ssl == null) {
+                throw new IllegalArgumentException("Unable to configure TLS reloading - TLS/SSL is not enabled on the server");
+            }
+        } else {
+            if (tlsConfigurationName.isPresent()) {
+                tlsConfiguration = registry.get(tlsConfigurationName.get()).orElseThrow();
+            } else {
+                tlsConfiguration = registry.getDefault().orElseThrow();
+            }
         }
 
         long period;
         // Validation
-        if (configuration.certificate.reloadPeriod.isPresent()) {
-            if (configuration.certificate.reloadPeriod.get().toMillis() < 30_000) {
+        if (sslConfig.certificate().reloadPeriod().isPresent()) {
+            if (sslConfig.certificate().reloadPeriod().get().toMillis() < 30_000) {
                 throw new IllegalArgumentException(
                         "Unable to configure TLS reloading - The reload period cannot be less than 30 seconds");
             }
-            period = configuration.certificate.reloadPeriod.get().toMillis();
+            period = sslConfig.certificate().reloadPeriod().get().toMillis();
         } else {
             return -1;
         }
 
+        boolean reloadFromRegistry = useRegistry;
+        TlsConfiguration registryConfiguration = tlsConfiguration;
+        SSLOptions nonRegistryOptions = ssl;
         Supplier<CompletionStage<Boolean>> task = new Supplier<CompletionStage<Boolean>>() {
             @Override
             public CompletionStage<Boolean> get() {
 
+                // We are reading files - must be done on a worker thread.
                 Future<Boolean> future = vertx.executeBlocking(new Callable<SSLOptions>() {
                     @Override
                     public SSLOptions call() throws Exception {
-                        // We are reading files - must be done on a worker thread.
-                        var c = reloadFileContent(ssl, configuration);
-                        if (c.equals(ssl)) { // No change, skip the update
-                            return null;
+                        if (reloadFromRegistry) {
+                            if (registryConfiguration.reload()) {
+                                return registryConfiguration.getSSLOptions();
+                            } else {
+                                return null;
+                            }
+                        } else {
+                            var c = reloadFileContent(nonRegistryOptions, sslConfig);
+                            if (c.equals(nonRegistryOptions)) { // No change, skip the update
+                                return null;
+                            }
+                            return c;
                         }
-                        return c;
                     }
                 }, true)
                         .flatMap(new Function<SSLOptions, Future<Boolean>>() {
@@ -143,14 +179,14 @@ public class TlsCertificateReloader {
         return CompletableFuture.allOf(futures);
     }
 
-    private static SSLOptions reloadFileContent(SSLOptions ssl, ServerSslConfig configuration) throws IOException {
+    private static SSLOptions reloadFileContent(SSLOptions ssl, ServerSslConfig sslConfig) throws IOException {
         var copy = new SSLOptions(ssl);
 
         final List<Path> keys = new ArrayList<>();
         final List<Path> certificates = new ArrayList<>();
 
-        configuration.certificate.keyFiles.ifPresent(keys::addAll);
-        configuration.certificate.files.ifPresent(certificates::addAll);
+        sslConfig.certificate().keyFiles().ifPresent(keys::addAll);
+        sslConfig.certificate().files().ifPresent(certificates::addAll);
 
         if (!certificates.isEmpty() && !keys.isEmpty()) {
             List<Buffer> certBuffer = new ArrayList<>();
@@ -169,15 +205,15 @@ public class TlsCertificateReloader {
                     .setCertValues(certBuffer)
                     .setKeyValues(keysBuffer);
             copy.setKeyCertOptions(opts);
-        } else if (configuration.certificate.keyStoreFile.isPresent()) {
+        } else if (sslConfig.certificate().keyStoreFile().isPresent()) {
             var opts = ((KeyStoreOptions) copy.getKeyCertOptions());
-            opts.setValue(Buffer.buffer(getFileContent(configuration.certificate.keyStoreFile.get())));
+            opts.setValue(Buffer.buffer(getFileContent(sslConfig.certificate().keyStoreFile().get())));
             copy.setKeyCertOptions(opts);
         }
 
-        if (configuration.certificate.trustStoreFile.isPresent()) {
-            var opts = ((KeyStoreOptions) copy.getKeyCertOptions());
-            opts.setValue(Buffer.buffer(getFileContent(configuration.certificate.trustStoreFile.get())));
+        if (sslConfig.certificate().trustStoreFile().isPresent()) {
+            var opts = ((KeyStoreOptions) copy.getTrustOptions());
+            opts.setValue(Buffer.buffer(getFileContent(sslConfig.certificate().trustStoreFile().get())));
             copy.setTrustOptions(opts);
         }
 

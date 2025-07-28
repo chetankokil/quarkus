@@ -15,20 +15,24 @@ import jakarta.ws.rs.client.ClientResponseFilter;
 import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.ext.Provider;
 
+import org.eclipse.microprofile.config.ConfigProvider;
+
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapSetter;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
-import io.opentelemetry.instrumentation.api.instrumenter.http.HttpClientAttributesExtractor;
-import io.opentelemetry.instrumentation.api.instrumenter.http.HttpClientAttributesGetter;
-import io.opentelemetry.instrumentation.api.instrumenter.http.HttpSpanNameExtractor;
-import io.opentelemetry.instrumentation.api.instrumenter.http.HttpSpanStatusExtractor;
-import io.opentelemetry.semconv.SemanticAttributes;
+import io.opentelemetry.instrumentation.api.semconv.http.HttpClientAttributesExtractor;
+import io.opentelemetry.instrumentation.api.semconv.http.HttpClientAttributesGetter;
+import io.opentelemetry.instrumentation.api.semconv.http.HttpSpanNameExtractor;
+import io.opentelemetry.instrumentation.api.semconv.http.HttpSpanStatusExtractor;
 import io.quarkus.arc.Unremovable;
 import io.quarkus.opentelemetry.runtime.QuarkusContextStorage;
+import io.quarkus.opentelemetry.runtime.config.runtime.OTelRuntimeConfig;
+import io.smallrye.config.SmallRyeConfig;
 
 /**
  * A client filter for the JAX-RS Client and MicroProfile REST Client that records OpenTelemetry data. This is only used
@@ -41,6 +45,7 @@ public class OpenTelemetryClientFilter implements ClientRequestFilter, ClientRes
     public static final String REST_CLIENT_OTEL_SPAN_CLIENT_CONTEXT = "otel.span.client.context";
     public static final String REST_CLIENT_OTEL_SPAN_CLIENT_PARENT_CONTEXT = "otel.span.client.parentContext";
     public static final String REST_CLIENT_OTEL_SPAN_CLIENT_SCOPE = "otel.span.client.scope";
+    private static final String URL_PATH_TEMPLATE_KEY = "UrlPathTemplate";
 
     /**
      * Property stored in the Client Request context to retrieve the captured Vert.x context.
@@ -55,17 +60,22 @@ public class OpenTelemetryClientFilter implements ClientRequestFilter, ClientRes
     // RESTEasy requires no-arg constructor for CDI injection: https://issues.redhat.com/browse/RESTEASY-1538
     // In Reactive Rest Client this is the constructor called. In the classic is the next one with injection.
     public OpenTelemetryClientFilter() {
-        this(GlobalOpenTelemetry.get());
+        this(GlobalOpenTelemetry.get(),
+                ConfigProvider.getConfig()
+                        .unwrap(SmallRyeConfig.class)
+                        .getConfigMapping(OTelRuntimeConfig.class));
     }
 
     @Inject
-    public OpenTelemetryClientFilter(final OpenTelemetry openTelemetry) {
+    public OpenTelemetryClientFilter(final OpenTelemetry openTelemetry, final OTelRuntimeConfig runtimeConfig) {
         ClientAttributesExtractor clientAttributesExtractor = new ClientAttributesExtractor();
 
         InstrumenterBuilder<ClientRequestContext, ClientResponseContext> builder = Instrumenter.builder(
                 openTelemetry,
                 INSTRUMENTATION_NAME,
                 HttpSpanNameExtractor.create(clientAttributesExtractor));
+
+        builder.setEnabled(!runtimeConfig.sdkDisabled());
 
         this.instrumenter = builder
                 .setSpanStatusExtractor(HttpSpanStatusExtractor.create(clientAttributesExtractor))
@@ -118,6 +128,11 @@ public class OpenTelemetryClientFilter implements ClientRequestFilter, ClientRes
 
         Context spanContext = (Context) request.getProperty(REST_CLIENT_OTEL_SPAN_CLIENT_CONTEXT);
         try {
+            String pathTemplate = (String) request.getProperty(URL_PATH_TEMPLATE_KEY);
+            if (pathTemplate != null && !pathTemplate.isEmpty()) {
+                Span.fromContext(spanContext)
+                        .updateName(request.getMethod() + " " + pathTemplate);
+            }
             instrumenter.end(spanContext, request, response, null);
         } finally {
             scope.close();
@@ -151,11 +166,6 @@ public class OpenTelemetryClientFilter implements ClientRequestFilter, ClientRes
                 return UriBuilder.fromUri(uri).userInfo(null).build().toString();
             }
             return uri.toString();
-        }
-
-        @Override
-        public String getTransport(ClientRequestContext clientRequestContext, ClientResponseContext clientResponseContext) {
-            return SemanticAttributes.NetTransportValues.IP_TCP;
         }
 
         @Override

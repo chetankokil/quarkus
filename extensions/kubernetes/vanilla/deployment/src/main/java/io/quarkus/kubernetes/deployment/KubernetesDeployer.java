@@ -5,6 +5,7 @@ import static io.quarkus.kubernetes.deployment.Constants.KIND;
 import static io.quarkus.kubernetes.deployment.Constants.KNATIVE;
 import static io.quarkus.kubernetes.deployment.Constants.KUBERNETES;
 import static io.quarkus.kubernetes.deployment.Constants.MINIKUBE;
+import static io.quarkus.kubernetes.deployment.Constants.VERSION_LABEL;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -17,17 +18,22 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.jboss.logging.Logger;
 
 import io.dekorate.utils.Serialization;
+import io.fabric8.kubernetes.api.builder.Visitor;
 import io.fabric8.kubernetes.api.model.APIResourceList;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.KubernetesList;
+import io.fabric8.kubernetes.api.model.KubernetesListBuilder;
+import io.fabric8.kubernetes.api.model.LabelSelectorFluent;
 import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
@@ -49,14 +55,13 @@ import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
 import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.DeploymentResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.OutputTargetBuildItem;
-import io.quarkus.kubernetes.client.deployment.KubernetesClientErrorHandler;
+import io.quarkus.kubernetes.client.deployment.internal.KubernetesClientErrorHandler;
 import io.quarkus.kubernetes.client.spi.KubernetesClientBuildItem;
 import io.quarkus.kubernetes.spi.DeployStrategy;
 import io.quarkus.kubernetes.spi.GeneratedKubernetesResourceBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesDeploymentClusterBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesOptionalResourceDefinitionBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesOutputDirectoryBuildItem;
-import io.quarkus.logging.Log;
 
 public class KubernetesDeployer {
 
@@ -113,7 +118,7 @@ public class KubernetesDeployer {
             Optional<SelectedKubernetesDeploymentTargetBuildItem> selectedDeploymentTarget,
             OutputTargetBuildItem outputTarget,
             KubernetesOutputDirectoryBuildItem outputDirectoryBuildItem,
-            OpenshiftConfig openshiftConfig,
+            OpenShiftConfig openshiftConfig,
             ContainerImageConfig containerImageConfig,
             ApplicationInfoBuildItem applicationInfo,
             List<KubernetesOptionalResourceDefinitionBuildItem> optionalResourceDefinitions,
@@ -190,7 +195,7 @@ public class KubernetesDeployer {
 
     private DeploymentResultBuildItem deploy(DeploymentTargetEntry deploymentTarget,
             KubernetesClient client, Path outputDir,
-            OpenshiftConfig openshiftConfig, ApplicationInfoBuildItem applicationInfo,
+            OpenShiftConfig openshiftConfig, ApplicationInfoBuildItem applicationInfo,
             List<KubernetesOptionalResourceDefinitionBuildItem> optionalResourceDefinitions) {
         String namespace = Optional.ofNullable(client.getNamespace()).orElse("default");
         log.info("Deploying to " + deploymentTarget.getName().toLowerCase() + " server: " + client.getMasterUrl()
@@ -207,10 +212,15 @@ public class KubernetesDeployer {
                         + conflictingResource.get().getMetadata().getName() + " because a "
                         + conflictingResource.get().getKind() + " with the same name exists.";
                 log.warn(messsage);
-                Log.warn("This may occur when switching deployment targets, or when the default deployment target is changed.");
-                Log.warn("Please remove conflicting resource and try again.");
+                log.warn("This may occur when switching deployment targets, or when the default deployment target is changed.");
+                log.warn("Please remove conflicting resource and try again.");
                 throw new IllegalStateException(messsage);
             }
+
+            list.getItems().stream().filter(distinctByResourceKey()).forEach(i -> {
+                Optional<HasMetadata> existing = Optional.ofNullable(client.resource(i).get());
+                checkLabelSelectorVersions(deploymentTarget, i, existing);
+            });
 
             list.getItems().stream().filter(distinctByResourceKey()).forEach(i -> {
                 deployResource(deploymentTarget, client, i, optionalResourceDefinitions);
@@ -239,6 +249,7 @@ public class KubernetesDeployer {
     private void deployResource(DeploymentTargetEntry deploymentTarget, KubernetesClient client, HasMetadata metadata,
             List<KubernetesOptionalResourceDefinitionBuildItem> optionalResourceDefinitions) {
         var r = findResource(client, metadata);
+        Optional<HasMetadata> existing = Optional.ofNullable(client.resource(metadata).get());
         if (shouldDeleteExisting(deploymentTarget, metadata)) {
             deleteResource(metadata, r);
         }
@@ -289,7 +300,7 @@ public class KubernetesDeployer {
                         .genericKubernetesResources(deploymentKind.getApiVersion(), deploymentKind.getKind()).withName(name)
                         .get();
                 if (resource != null) {
-                    Log.warn("Found conflicting resource:" + resource.getApiVersion() + "/" + resource.getKind() + ":"
+                    log.warn("Found conflicting resource:" + resource.getApiVersion() + "/" + resource.getKind() + ":"
                             + resource.getMetadata().getName());
                     return Optional.of(resource);
                 }
@@ -328,7 +339,7 @@ public class KubernetesDeployer {
         return client.resource(metadata);
     }
 
-    private void printExposeInformation(KubernetesClient client, KubernetesList list, OpenshiftConfig openshiftConfig,
+    private void printExposeInformation(KubernetesClient client, KubernetesList list, OpenShiftConfig openshiftConfig,
             ApplicationInfoBuildItem applicationInfo) {
         String generatedRouteName = ResourceNameUtil.getResourceName(openshiftConfig, applicationInfo);
         List<HasMetadata> items = list.getItems();
@@ -385,7 +396,6 @@ public class KubernetesDeployer {
         if (deploymentTarget.getDeployStrategy() != DeployStrategy.CreateOrUpdate) {
             return false;
         }
-
         return KNATIVE.equalsIgnoreCase(deploymentTarget.getName())
                 || resource instanceof Service
                 || (Objects.equals("v1", resource.getApiVersion()) && Objects.equals("Service", resource.getKind()))
@@ -397,5 +407,45 @@ public class KubernetesDeployer {
         Map<Object, Boolean> seen = new ConcurrentHashMap<>();
         return t -> seen.putIfAbsent(t.getApiVersion() + "/" + t.getKind() + ":" + t.getMetadata().getName(),
                 Boolean.TRUE) == null;
+    }
+
+    private static void checkLabelSelectorVersions(DeploymentTargetEntry deploymnetTarget, HasMetadata resource,
+            Optional<HasMetadata> existing) {
+        if (!existing.isPresent()) {
+            return;
+        }
+
+        if (resource instanceof Deployment) {
+            Optional<String> version = getLabelSelectorVersion(resource);
+            Optional<String> existingVersion = getLabelSelectorVersion(existing.get());
+            if (version.isPresent() && existingVersion.isPresent()) {
+                if (!version.get().equals(existingVersion.get())) {
+                    throw new IllegalStateException(String.format(
+                            "A previous Deployment with a conflicting label %s=%s was found in the label selector (current is %s=%s). As the label selector is immutable, you need to either align versions or manually delete previous deployment.",
+                            VERSION_LABEL, existingVersion.get(), VERSION_LABEL, version.get()));
+                }
+            } else if (version.isPresent()) {
+                throw new IllegalStateException(String.format(
+                        "A Deployment with a conflicting label %s=%s was in the label selector was requested (previous had no such label). As the label selector is immutable, you need to either manually delete previous deployment, or remove the label (consider using quarkus.%s.add-version-to-label-selectors=false).",
+                        VERSION_LABEL, version.get(), deploymnetTarget.getName().toLowerCase()));
+            } else if (existingVersion.isPresent()) {
+                throw new IllegalStateException(String.format(
+                        "A Deployment with no label in the label selector was requested (previous includes %s=%s). As the label selector is immutable, you need to either manually delete previous deployment, or ensure the %s label is present (consider using quarkus.%s.add-version-to-label-selectors=true).",
+                        VERSION_LABEL, existingVersion.get(), VERSION_LABEL, deploymnetTarget.getName().toLowerCase()));
+            }
+        }
+    }
+
+    private static Optional<String> getLabelSelectorVersion(HasMetadata resource) {
+        AtomicReference<String> version = new AtomicReference<>();
+        KubernetesList list = new KubernetesListBuilder().addToItems(resource).accept(new Visitor<LabelSelectorFluent<?>>() {
+            @Override
+            public void visit(LabelSelectorFluent<?> item) {
+                if (item.getMatchLabels() != null) {
+                    version.set(item.getMatchLabels().get(VERSION_LABEL));
+                }
+            }
+        }).build();
+        return Optional.ofNullable(version.get());
     }
 }

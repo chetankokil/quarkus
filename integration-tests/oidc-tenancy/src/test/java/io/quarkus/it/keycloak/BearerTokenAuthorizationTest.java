@@ -1,36 +1,44 @@
 package io.quarkus.it.keycloak;
 
+import static io.quarkus.it.keycloak.BearerTokenStepUpAuthenticationTest.getAccessTokenWithAcr;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
+import org.htmlunit.FailingHttpStatusCodeException;
+import org.htmlunit.SilentCssErrorHandler;
+import org.htmlunit.WebClient;
+import org.htmlunit.WebRequest;
+import org.htmlunit.WebResponse;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPage;
+import org.htmlunit.util.Cookie;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-
-import com.gargoylesoftware.htmlunit.FailingHttpStatusCodeException;
-import com.gargoylesoftware.htmlunit.SilentCssErrorHandler;
-import com.gargoylesoftware.htmlunit.WebClient;
-import com.gargoylesoftware.htmlunit.WebRequest;
-import com.gargoylesoftware.htmlunit.WebResponse;
-import com.gargoylesoftware.htmlunit.html.HtmlForm;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
-import com.gargoylesoftware.htmlunit.util.Cookie;
 
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.keycloak.client.KeycloakTestClient;
 import io.restassured.RestAssured;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
+import io.vertx.mutiny.core.Vertx;
+import io.vertx.mutiny.core.buffer.Buffer;
+import io.vertx.mutiny.core.http.HttpClient;
 
 /**
  * @author <a href="mailto:psilva@redhat.com">Pedro Igor</a>
@@ -54,7 +62,7 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             // First call after a redirect, tenant-id is initially calculated from the state `q_auth` cookie.
             // 'reauthenticated' flag is set is because, in fact, it is actually a 2nd call due to
             // quarkus-oidc doing a final redirect after completing a code flow to drop the redirect OIDC parameters
@@ -85,7 +93,63 @@ public class BearerTokenAuthorizationTest {
             assertNull(getStateCookieSavedPath(webClient, "tenant-web-app"));
 
             webClient.getCookieManager().clearCookies();
+
+            checkHealth();
         }
+    }
+
+    @Test
+    public void testFormPostLogoutWebApp() throws IOException {
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient.getPage("http://localhost:8081/tenant/tenant-web-app/api/user/webapp");
+            assertEquals("Sign in to quarkus-webapp", page.getTitleText());
+            HtmlForm loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            page = loginForm.getButtonByName("login").click();
+            assertEquals("tenant-web-app:alice:reauthenticated", page.getBody().asNormalizedText());
+            assertNotNull(getSessionCookie(webClient, "tenant-web-app"));
+
+            // First RP initiated form-post logout check
+            webClient.getOptions().setRedirectEnabled(false);
+            WebResponse webResponse = webClient
+                    .loadWebResponse(
+                            new WebRequest(URI.create("http://localhost:8081/tenant/tenant-web-app/form-post-logout").toURL()));
+            // Session cookie must be null
+            assertNull(getSessionCookie(webClient, "tenant-web-app"));
+
+            assertEquals(200, webResponse.getStatusCode());
+            String formPostLogout = webResponse.getContentAsString();
+            assertTrue(formPostLogout.startsWith("<html>"));
+            assertTrue(formPostLogout.contains("<form method=\"post\" action=\"http://localhost:8081/oidc/form-post-logout\""));
+            assertTrue(formPostLogout.endsWith("</html>"));
+            // Re-login
+            webClient.getOptions().setRedirectEnabled(true);
+            webClient.getCookieManager().clearCookies();
+
+            page = webClient.getPage("http://localhost:8081/tenant/tenant-web-app/api/user/webapp");
+            assertEquals("Sign in to quarkus-webapp", page.getTitleText());
+            loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            page = loginForm.getButtonByName("login").click();
+            assertEquals("tenant-web-app:alice:reauthenticated", page.getBody().asNormalizedText());
+            // Session cookie must not be null
+            assertNotNull(getSessionCookie(webClient, "tenant-web-app"));
+
+            // Complete RP initiated form-post logout
+            page = webClient.getPage("http://localhost:8081/tenant/tenant-web-app/form-post-logout");
+            assertEquals("alice, you have been logged out with the form post logout", page.getBody().asNormalizedText());
+            // Session cookie must be null
+            assertNull(getSessionCookie(webClient, "tenant-web-app"));
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    private static void checkHealth() {
+        RestAssured.when().get("http://localhost:8081/q/health/ready").then().statusCode(404);
     }
 
     @Test
@@ -125,7 +189,7 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals(expectedResult, page.getBody().asNormalizedText());
             webClient.getCookieManager().clearCookies();
         }
@@ -139,7 +203,7 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
 
             assertEquals("userName: alice, idToken: true, accessToken: true, refreshToken: true",
                     page.getBody().asNormalizedText());
@@ -209,11 +273,16 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("alice:web-app", page.getBody().asNormalizedText());
             webClient.getCookieManager().clearCookies();
         }
         RestAssured.when().get("/oidc/userinfo-endpoint-call-count").then().body(equalTo("1"));
+    }
+
+    @Test
+    public void testOidcClientMultipleAudiences() throws IOException {
+        RestAssured.when().get("/oidc-client/multiple-audiences").then().body(equalTo("audience1,audience2"));
     }
 
     @Test
@@ -234,7 +303,7 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("alice:web-app", page.getBody().asNormalizedText());
             webClient.getCookieManager().clearCookies();
         }
@@ -270,7 +339,7 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("tenant-web-app-no-discovery:alice", page.getBody().asNormalizedText());
 
             page = webClient.getPage("http://localhost:8081/tenant/tenant-web-app-no-discovery/api/user/webapp-no-discovery");
@@ -289,8 +358,9 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("tenant-web-app:alice:reauthenticated", page.getBody().asNormalizedText());
+            assertNotNull(getSessionCookie(webClient, "tenant-web-app"));
             // tenant-web-app2
             page = webClient.getPage("http://localhost:8081/tenant/tenant-web-app2/api/user/webapp2");
             assertNull(getStateCookieSavedPath(webClient, "tenant-web-app2"));
@@ -298,9 +368,11 @@ public class BearerTokenAuthorizationTest {
             loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("tenant-web-app2:alice", page.getBody().asNormalizedText());
-
+            assertNull(getSessionCookie(webClient, "tenant-web-app"));
+            Cookie sessionCookie = getSessionCookie(webClient, "tenant-web-app2");
+            assertNotNull(sessionCookie);
             webClient.getCookieManager().clearCookies();
         }
     }
@@ -644,10 +716,43 @@ public class BearerTokenAuthorizationTest {
             HtmlForm loginForm = page.getForms().get(0);
             loginForm.getInputByName("username").setValueAttribute("alice");
             loginForm.getInputByName("password").setValueAttribute("alice");
-            page = loginForm.getInputByName("login").click();
+            page = loginForm.getButtonByName("login").click();
             assertEquals("tenant-web-app-dynamic:alice", page.getBody().asNormalizedText());
             webClient.getCookieManager().clearCookies();
         }
+    }
+
+    @Test
+    public void testBothGlobalAndTenantSpecificJwtValidator() {
+        RestAssured.given().auth().oauth2(getAccessToken("alice", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim/api/user")
+                .then()
+                .statusCode(200);
+        RestAssured.given().auth().oauth2(getAccessToken("jdoe", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim/api/user")
+                .then()
+                .statusCode(401);
+        RestAssured.given().auth().oauth2(getAccessToken("admin", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim/api/user")
+                .then()
+                .statusCode(401);
+    }
+
+    @Test
+    public void testGlobalJwtValidator() {
+        // tests that tenant-specific validator is not applied as the @TenantFeature value is not matched
+        RestAssured.given().auth().oauth2(getAccessToken("alice", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim-alternative/api/user")
+                .then()
+                .statusCode(200);
+        RestAssured.given().auth().oauth2(getAccessToken("jdoe", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim-alternative/api/user")
+                .then()
+                .statusCode(401);
+        RestAssured.given().auth().oauth2(getAccessToken("admin", "b", "b"))
+                .when().get("/tenant/tenant-requiredclaim-alternative/api/user")
+                .then()
+                .statusCode(200);
     }
 
     @Test
@@ -683,6 +788,260 @@ public class BearerTokenAuthorizationTest {
                 .when().get("/tenant-opaque/tenant-oidc/api/admin-permission")
                 .then()
                 .statusCode(403);
+    }
+
+    @Test
+    public void testTokenIntrospectionRequiredClaims() {
+        RestAssured.when().post("/oidc/enable-introspection").then().body(equalTo("true"));
+        RestAssured.when().post("/oidc/opaque-token-call-count").then().body(equalTo("0"));
+
+        // Successful request with opaque token 2
+        String opaqueToken2 = getOpaqueAccessToken2FromSimpleOidc();
+        RestAssured.given().auth().oauth2(opaqueToken2)
+                .when().get("/tenant-introspection/tenant-introspection-required-claims")
+                .then()
+                .statusCode(200)
+                .body(equalTo("alice, required_claim:1"));
+
+        // Expected to fail now because its introspection does not include the expected required claim
+        RestAssured.given().auth().oauth2(opaqueToken2)
+                .when().get("/tenant-introspection/tenant-introspection-required-claims")
+                .then()
+                .statusCode(401);
+
+        RestAssured.when().post("/oidc/opaque-token-call-count").then().body(equalTo("0"));
+    }
+
+    @Test
+    public void testMultipleTokenIntrospectionRequiredClaims() {
+        RestAssured.when().post("/oidc/enable-introspection").then().body(equalTo("true"));
+        RestAssured.when().post("/oidc/opaque-token-3-call-count").then().body(equalTo("0"));
+        String opaqueToken3 = getOpaqueAccessToken3FromSimpleOidc();
+
+        // Expected to fail now because its introspection does include the expected required claim, but value is "1"
+        RestAssured.given().auth().oauth2(opaqueToken3)
+                .when().get("/tenant-introspection/tenant-introspection-multiple-required-claims")
+                .then()
+                .statusCode(401);
+
+        // Expected to fail now because its introspection does include the expected required claim, but value is ["1"]
+        RestAssured.given().auth().oauth2(opaqueToken3)
+                .when().get("/tenant-introspection/tenant-introspection-multiple-required-claims")
+                .then()
+                .statusCode(401);
+
+        // Expected to fail now because its introspection does not include the expected required claim
+        RestAssured.given().auth().oauth2(opaqueToken3)
+                .when().get("/tenant-introspection/tenant-introspection-multiple-required-claims")
+                .then()
+                .statusCode(401);
+
+        // Successful request with opaque token 3 because the required claim is ["1","2"]
+        RestAssured.given().auth().oauth2(opaqueToken3)
+                .when().get("/tenant-introspection/tenant-introspection-multiple-required-claims")
+                .then()
+                .statusCode(200)
+                .body(equalTo("alice, required_claim:1,2"));
+
+        RestAssured.when().post("/oidc/opaque-token-3-call-count").then().body(equalTo("0"));
+    }
+
+    @Test
+    public void testResolveStaticTenantsByPathPatterns() {
+        // default tenant path pattern is more specific, therefore it wins over tenant-b pattern that is also matched
+        assertStaticTenantSuccess("a", "default", "tenant-b/default");
+        assertStaticTenantFailure("a", "tenant-b/default-b");
+        assertStaticTenantFailure("a", "tenant-b/default-b/");
+        assertStaticTenantFailure("b", "tenant-b/default");
+        assertStaticTenantFailure("b", "tenant-b/default/");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b/");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b/default-b");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b/default-b/");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b/public-key");
+        assertStaticTenantSuccess("b", "tenant-b", "tenant-b/public-key");
+        assertStaticTenantFailure("public-key", "tenant-b/public-key");
+        assertStaticTenantFailure("public-key", "tenant-b/public-key/");
+        assertStaticTenantSuccess("public-key", "public-key", "tenant-c/public-key");
+        assertStaticTenantSuccess("public-key", "public-key", "tenant-c/public-key/");
+        assertStaticTenantSuccess("public-key", "public-key", "public-key/match");
+        assertStaticTenantSuccess("public-key", "public-key", "public-key/match/");
+        assertStaticTenantFailure("b", "public-key/match");
+        assertStaticTenantFailure("b", "public-key/match/");
+        assertStaticTenantFailure("public-key", "public-key-c/match");
+        assertStaticTenantFailure("public-key", "public-key-c/match/");
+        assertStaticTenantSuccess("a", "public-key", "public-key-c/match");
+
+        // assert path is normalized and tenant is selected by path-matching pattern before HTTP perms are checked
+        Vertx vertx = Vertx.vertx();
+        HttpClient httpClient = null;
+        try {
+            httpClient = vertx.createHttpClient();
+            httpClient
+                    .request(HttpMethod.GET, RestAssured.port, URI.create(RestAssured.baseURI).getHost(),
+                            "/api/tenant-paths///public-key//match")
+                    .flatMap(r -> r.putHeader("Authorization", "Bearer " + getAccessToken("public-key")).send())
+                    .flatMap(r -> {
+                        assertEquals(200, r.statusCode());
+                        return r.body();
+                    })
+                    .map(Buffer::toString)
+                    .invoke(b -> assertEquals("public-key", b))
+                    .await().indefinitely();
+            httpClient
+                    .request(HttpMethod.GET, RestAssured.port, URI.create(RestAssured.baseURI).getHost(),
+                            "/api/tenant-paths///public-key//match")
+                    .flatMap(r -> r.putHeader("Authorization", "Bearer " + getAccessToken("b")).send())
+                    .invoke(r -> assertEquals(401, r.statusCode()))
+                    .await().indefinitely();
+        } finally {
+            if (httpClient != null) {
+                httpClient.closeAndAwait();
+            }
+            vertx.closeAndAwait();
+        }
+    }
+
+    @Test
+    public void testResolveTenantsByIssuer() {
+        assertStaticTenantSuccess("e", "tenant-e", "tenant-by-issuer");
+        assertStaticTenantSuccess("f", "tenant-f", "tenant-by-issuer");
+    }
+
+    private void assertStaticTenantSuccess(String clientId, String tenant, String subPath) {
+        // tenant is resolved based on path pattern and access token is valid
+        final String accessToken = getAccessToken(clientId);
+        RestAssured.given().auth().oauth2(accessToken).when().get("/api/tenant-paths/" + subPath).then().statusCode(200)
+                .body(equalTo(tenant));
+    }
+
+    private String getAccessToken(String clientId) {
+        final String accessToken;
+        if ("public-key".equals(clientId)) {
+            accessToken = AnnotationBasedTenantTest.getTokenWithRole();
+        } else {
+            accessToken = getAccessToken("alice", clientId);
+        }
+        return accessToken;
+    }
+
+    private void assertStaticTenantFailure(String clientId, String subPath) {
+        // tenant is not resolved based on path pattern or access token is not valid
+        final String accessToken = getAccessToken(clientId);
+        RestAssured.given().auth().oauth2(accessToken).when().get("/api/tenant-paths/" + subPath).then().statusCode(401);
+    }
+
+    @Test
+    public void testAnnotationBasedAuthMechSelection() throws IOException {
+        // endpoint is annotated with @CodeFlow
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient
+                    .getPage("http://localhost:8081/tenant/tenant-web-app-dynamic/api/user/code-flow-auth-mech-annotation");
+            assertEquals("Sign in to quarkus-webapp", page.getTitleText());
+            HtmlForm loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+            page = loginForm.getButtonByName("login").click();
+            assertEquals("alice", page.getBody().asNormalizedText());
+            webClient.getCookieManager().clearCookies();
+        }
+        RestAssured.given().auth().oauth2(getAccessTokenFromSimpleOidc("1"))
+                .when().get("/tenant/tenant-oidc-no-discovery/api/user/code-flow-auth-mech-annotation")
+                .then()
+                .statusCode(401);
+
+        // endpoint is annotated with @Bearer
+        RestAssured.given().auth().oauth2(getAccessTokenFromSimpleOidc("1"))
+                .when().get("/tenant/tenant-oidc-no-discovery/api/user/bearer-auth-mech-annotation")
+                .then()
+                .statusCode(204); // ID token name is null
+        boolean codeFlowAuthFailed = false;
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient
+                    .getPage("http://localhost:8081/tenant/tenant-web-app-dynamic/api/user/bearer-auth-mech-annotation");
+            assertEquals("Sign in to quarkus-webapp", page.getTitleText());
+            HtmlForm loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+            webClient.getOptions().setRedirectEnabled(false);
+            loginForm.getButtonByName("login").click();
+        } catch (FailingHttpStatusCodeException e) {
+            codeFlowAuthFailed = true;
+        }
+        if (!codeFlowAuthFailed) {
+            Assertions.fail(
+                    "Endpoint 'bearer-auth-mech-annotation' is annotated with the @Bearer annotation, code flow auth should fail");
+        }
+    }
+
+    @Test
+    public void testStepUpAuthUsingRequiredClaimsConfigProperty() {
+        RestAssured.when().post("/oidc/jwk-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/introspection-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/revoke-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/disable-introspection").then().body(equalTo("false"));
+        RestAssured.when().post("/oidc/disable-discovery").then().body(equalTo("false"));
+
+        // for this tenant, 3 'acr' values are required: alpha, beta, gamma
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of()))
+                .when().get("/tenants/step-up-auth-required-claims/api/user")
+                .then()
+                .statusCode(401)
+                .header("www-authenticate", containsString("insufficient_user_authentication"))
+                .header("www-authenticate", containsString("acr_values"))
+                .header("www-authenticate", containsString("alpha"))
+                .header("www-authenticate", containsString("beta"))
+                .header("www-authenticate", containsString("gamma"));
+        // 'gamma' acr value is missing -> 401
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of("alpha", "beta")))
+                .when().get("/tenants/step-up-auth-required-claims/api/user")
+                .then()
+                .statusCode(401)
+                .header("www-authenticate", containsString("insufficient_user_authentication"))
+                .header("www-authenticate", containsString("acr_values"))
+                .header("www-authenticate", containsString("alpha"))
+                .header("www-authenticate", containsString("beta"))
+                .header("www-authenticate", containsString("gamma"));
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of("alpha", "beta", "gamma")))
+                .when().get("/tenants/step-up-auth-required-claims/api/user")
+                .then()
+                .statusCode(200)
+                .body(equalTo("alice:service"));
+    }
+
+    @Test
+    public void testStepUpAuthUsingCustomValidatorRequiringAcrValues() {
+        RestAssured.when().post("/oidc/jwk-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/introspection-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/revoke-endpoint-call-count").then().body(equalTo("0"));
+        RestAssured.when().post("/oidc/disable-introspection").then().body(equalTo("false"));
+        RestAssured.when().post("/oidc/disable-discovery").then().body(equalTo("false"));
+
+        // for this tenant, 3 'acr' values are required: delta, epsilon, zeta
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of()))
+                .when().get("/tenants/step-up-auth-custom-validator/api/user")
+                .then()
+                .statusCode(401)
+                .header("www-authenticate", containsString("insufficient_user_authentication"))
+                .header("www-authenticate", containsString("acr_values"))
+                .header("www-authenticate", containsString("delta"))
+                .header("www-authenticate", containsString("epsilon"))
+                .header("www-authenticate", containsString("zeta"));
+        // 'gamma' acr value is missing -> 401
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of("alpha", "beta")))
+                .when().get("/tenants/step-up-auth-custom-validator/api/user")
+                .then()
+                .statusCode(401)
+                .header("www-authenticate", containsString("insufficient_user_authentication"))
+                .header("www-authenticate", containsString("acr_values"))
+                .header("www-authenticate", containsString("delta"))
+                .header("www-authenticate", containsString("epsilon"))
+                .header("www-authenticate", containsString("zeta"));
+        RestAssured.given().auth().oauth2(getAccessTokenWithAcr(Set.of("delta", "epsilon", "zeta")))
+                .when().get("/tenants/step-up-auth-custom-validator/api/user")
+                .then()
+                .statusCode(200)
+                .body(equalTo("alice:service"));
     }
 
     private String getAccessToken(String userName, String clientId) {
@@ -732,7 +1091,25 @@ public class BearerTokenAuthorizationTest {
         return object.getString("access_token");
     }
 
-    private WebClient createWebClient() {
+    private String getOpaqueAccessToken2FromSimpleOidc() {
+        String json = RestAssured
+                .when()
+                .post("/oidc/opaque-token2")
+                .body().asString();
+        JsonObject object = new JsonObject(json);
+        return object.getString("access_token");
+    }
+
+    private String getOpaqueAccessToken3FromSimpleOidc() {
+        String json = RestAssured
+                .when()
+                .post("/oidc/opaque-token3")
+                .body().asString();
+        JsonObject object = new JsonObject(json);
+        return object.getString("access_token");
+    }
+
+    static WebClient createWebClient() {
         WebClient webClient = new WebClient();
         webClient.setCssErrorHandler(new SilentCssErrorHandler());
         return webClient;
@@ -748,7 +1125,7 @@ public class BearerTokenAuthorizationTest {
         return null;
     }
 
-    private Cookie getSessionCookie(WebClient webClient, String tenantId) {
+    static Cookie getSessionCookie(WebClient webClient, String tenantId) {
         return webClient.getCookieManager().getCookie("q_session" + (tenantId == null ? "" : "_" + tenantId));
     }
 

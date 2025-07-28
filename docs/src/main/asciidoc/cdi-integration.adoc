@@ -13,7 +13,7 @@ include::_attributes.adoc[]
 :extensions: io.quarkus:quarkus-arc
 
 ArC, the CDI container in Quarkus, is bootstrapped at build time.
-To integrate with the container, https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#spi_lite[CDI Build Compatible Extensions, window="_blank"] can be used, as well as a Quarkus-specific extension API.
+To integrate with the container, https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#spi_lite[CDI Build Compatible Extensions, window="_blank"] can be used, as well as a Quarkus-specific extension API.
 CDI Portable Extensions are not and cannot be supported.
 This guide focuses on the Quarkus-specific extensions API.
 
@@ -40,7 +40,7 @@ In the following sections we will describe all the relevant build items and comm
 == Metadata Sources
 
 Classes and annotations are the primary source of bean-level metadata.
-The initial metadata are read from the _bean archive index_, an immutable https://github.com/wildfly/jandex[Jandex index, window="_blank"] which is built from various sources during <<cdi-reference.adoc#bean_discovery,bean discovery>>.
+The initial metadata are read from the _bean archive index_, an immutable https://github.com/smallrye/jandex[Jandex index, window="_blank"] which is built from various sources during <<cdi-reference.adoc#bean_discovery,bean discovery>>.
 However, extensions can add, remove or transform the metadata at certain stages of the bootstrap.
 Moreover, extensions can also register <<synthetic_beans,synthetic components>>.
 This is an important aspect to realize when integrating CDI components in Quarkus.
@@ -76,7 +76,7 @@ IMPORTANT: It is not possible to conditionally enable/disable additional beans v
 ----
 @BuildStep
 AdditionalBeanBuildItem additionalBeans() {
-     return new AdditionalBeanBuildItem(SmallRyeHealthReporter.class, HealthServlet.class)); <1>
+     return new AdditionalBeanBuildItem(SmallRyeHealthReporter.class, HealthServlet.class); <1>
 }
 ----
 <1> `AdditionalBeanBuildItem.Builder` can be used for more complex use cases.
@@ -93,8 +93,8 @@ NOTE: If no default scope is specified the `@Dependent` pseudo-scope is used.
 
 === _Reason 2_: Class Is Discovered but Has No Bean Defining Annotation
 
-In Quarkus, the application is represented by a single bean archive with the https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#default_bean_discovery[bean discovery mode `annotated`, window="_blank"].
-Therefore, bean classes that don't have a https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#bean_defining_annotations[bean defining annotation, window="_blank"] are ignored.
+In Quarkus, the application is represented by a single bean archive with the https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#default_bean_discovery[bean discovery mode `annotated`, window="_blank"].
+Therefore, bean classes that don't have a https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#bean_defining_annotations[bean defining annotation, window="_blank"] are ignored.
 Bean defining annotations are declared on the class-level and include scopes, stereotypes and `@Interceptor`.
 
 _Solution 1_: Use the `AutoAddScopeBuildItem`. This build item can be used to add a scope to a class that meets certain conditions.
@@ -163,26 +163,26 @@ _Solution_: Use the `AdditionalBeanBuildItem` as described in <<additional_bean_
 == Use Case - I Need To Transform Annotation Metadata
 
 In some cases, it's useful to be able to modify the annotation metadata.
-Quarkus provides a powerful alternative to https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#process_annotated_type[`jakarta.enterprise.inject.spi.ProcessAnnotatedType`, window="_blank"] and https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#bce_enhancement[`jakarta.enterprise.inject.build.compatible.spi.Enhancement`, window="_blank"].
+Quarkus provides a powerful alternative to https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#process_annotated_type[`jakarta.enterprise.inject.spi.ProcessAnnotatedType`, window="_blank"] and https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#bce_enhancement[`jakarta.enterprise.inject.build.compatible.spi.Enhancement`, window="_blank"].
 With an `AnnotationsTransformerBuildItem` it's possible to override the annotations that exist on bean classes.
 
 NOTE: Keep in mind that annotation transformers must be produced _before_ the bean discovery starts.
 
 For example, you might want to add an interceptor binding to a specific bean class.
-You can use a convenient builder-like API to create a transformer instance:
+You can use a convenient builder API to create a transformation instance:
 
-Builder Example
+.Builder Example
 [source,java]
 ----
 @BuildStep
 AnnotationsTransformerBuildItem transform() {
-   return new AnnotationsTransformerBuildItem(AnnotationsTransformer.appliedToClass() <1>
-        .whenClass(c -> c.name().toString().equals("org.acme.Bar")) <2>
-        .thenTransform(t -> t.add(MyInterceptorBinding.class))); <3>
+    return new AnnotationsTransformerBuildItem(AnnotationTransformation.forClasses() // <1>
+        .whenClass(DotName.createSimple("org.acme.Bar")) // <2>
+        .transform(t -> t.add(MyInterceptorBinding.class))); // <3>
 }
 ----
 <1> The transformer is only applied to classes.
-<2> Only apply the transformation if the class name equals to `org.acme.Bar`.
+<2> Only apply the transformation if the class is `org.acme.Bar`.
 <3> Add the `@MyInterceptorBinding` annotation.
 
 The example above can be rewritten with an anonymous class:
@@ -192,22 +192,23 @@ The example above can be rewritten with an anonymous class:
 ----
 @BuildStep
 AnnotationsTransformerBuildItem transform() {
-   return new AnnotationsTransformerBuildItem(new AnnotationsTransformer() {
+    return new AnnotationsTransformerBuildItem(new AnnotationTransformation() {
+        public boolean supports(AnnotationTarget.Kind kind) {
+            return kind == AnnotationTarget.Kind.CLASS; // <1>
+        }
 
-      public boolean appliesTo(org.jboss.jandex.AnnotationTarget.Kind kind) {
-         return kind == org.jboss.jandex.AnnotationTarget.Kind.CLASS; <1>
-      }
-
-      public void transform(TransformationContext context) {
-         if (context.getTarget().asClass().name().toString().equals("org.acme.Bar")) {
-            context.transform().add(MyInterceptorBinding.class).done(); <2>
-         }
-      }
+        public void apply(TransformationContext context) {
+            if (context.declaration().asClass().name().toString().equals("org.acme.Bar")) {
+                context.add(MyInterceptorBinding.class); // <2>
+            }
+        }
     });
 }
 ----
 <1> The transformer is only applied to classes.
-<2> If the class name equals to `org.acme.Bar` then add `@MyInterceptorBinding`. Don't forget to invoke `Transformation#done()`.
+<2> If the class name equals to `org.acme.Bar` then add `@MyInterceptorBinding`.
+
+NOTE: The previous `AnnotationsTransformer` API from ArC is still supported, but the new `AnnotationTransformation` API from Jandex is preferred.
 
 Build steps can query the transformed annotations for a given annotation target via the `TransformedAnnotationsBuildItem`.
 
@@ -215,11 +216,12 @@ Build steps can query the transformed annotations for a given annotation target 
 [source,java]
 ----
 @BuildStep
-void queryAnnotations(TransformedAnnotationsBuildItem transformedAnnotations, BuildProducer<MyBuildItem> myBuildItem) {
-   ClassInfo myClazz = ...;
-   if (transformedAnnotations.getAnnotations(myClazz).isEmpty()) { <1>
-     myBuildItem.produce(new MyBuildItem());
-   }
+void queryAnnotations(TransformedAnnotationsBuildItem transformedAnnotations,
+        BuildProducer<MyBuildItem> myBuildItem) {
+    ClassInfo myClazz = ...;
+    if (transformedAnnotations.getAnnotations(myClazz).isEmpty()) { // <1>
+        myBuildItem.produce(new MyBuildItem());
+    }
 }
 ----
 <1> `TransformedAnnotationsBuildItem.getAnnotations()` will return a possibly transformed set of annotations.
@@ -282,7 +284,7 @@ void doSomethingWithNamedBeans(SynthesisFinishedBuildItem synthesisFinished, Bui
 Sometimes it is practical to be able to register a _synthetic bean_.
 Bean attributes of a synthetic bean are not derived from a Java class, method or field.
 Instead, all the attributes are defined by an extension.
-In regular CDI, this could be achieved using the https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#after_bean_discovery[`AfterBeanDiscovery.addBean()`, window="_blank"] and https://jakarta.ee/specifications/cdi/4.0/jakarta-cdi-spec-4.0.html#bce_synthesis[`SyntheticComponents.addBean()`] methods.
+In regular CDI, this could be achieved using the https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#after_bean_discovery[`AfterBeanDiscovery.addBean()`, window="_blank"] and https://jakarta.ee/specifications/cdi/4.1/jakarta-cdi-spec-4.1.html#bce_synthesis[`SyntheticComponents.addBean()`] methods.
 
 _Solution_: If you need to register a synthetic bean then use the `SyntheticBeanBuildItem`.
 
@@ -320,6 +322,24 @@ SyntheticBeanBuildItem syntheticBean(TestRecorder recorder) {
 ----
 <1> By default, a synthetic bean is initialized during `STATIC_INIT`.
 <2> The bean instance is supplied by a value returned from a recorder method.
+
+It is also possible to create a generic synthetic bean `Foo<Bar>`.
+
+.`SyntheticBeanBuildItem` Example 3
+[source,java]
+----
+@BuildStep
+@Record(STATIC_INIT)
+SyntheticBeanBuildItem syntheticBean(TestRecorder recorder) {
+   return SyntheticBeanBuildItem.configure(Foo.class)
+                .types(ParameterizedType.create(Foo.class, ClassType.create(Bar.class)))) <1>
+                .scope(Singleton.class)
+                .runtimeValue(recorder.createFooBar())
+                .done();
+}
+----
+
+<1> `types()` or `addType()` must be used to specify the generic type.
 
 It is possible to mark a synthetic bean to be initialized during `RUNTIME_INIT`.
 See the <<writing-extensions.adoc#bootstrap-three-phases,Three Phases of Bootstrap and Quarkus Philosophy>> for more information about the difference between `STATIC_INIT` and `RUNTIME_INIT`.
@@ -398,6 +418,89 @@ public class TestRecorder {
 }
 ----
 <1> Pass a contextual reference of `Bar` to the constructor of `Foo`.
+
+[[inactive-synthetic-beans]]
+=== Inactive Synthetic Beans
+
+In the case when one needs to register multiple synthetic beans at build time but only wants a subset of them active at runtime, it is useful to be able to mark a synthetic bean as _inactive_.
+This is done by configuring a "check active" procedure, which should be a `Supplier<ActiveResult>` obtained from a recorder:
+
+.Inactive Synthetic Bean - Build Step Example
+[source,java]
+----
+@BuildStep
+@Record(RUNTIME_INIT)
+SyntheticBeanBuildItem syntheticBean(TestRecorder recorder) {
+    return SyntheticBeanBuildItem.configure(Foo.class)
+            .scope(Singleton.class)
+            .startup() // <1>
+            .checkActive(recorder.isFooActive()) // <2>
+            .createWith(recorder.createFoo())
+            .done();
+}
+----
+<1> A bean that might be inactive is typically initialized eagerly, to make sure that an error is thrown at application startup.
+    If the bean is in fact inactive, but is not injected into an always-active bean, eager initialization is skipped and no error is thrown.
+<2> Configures the "check active" procedure.
+
+.Inactive Synthetic Bean - Recorder Example
+[source,java]
+----
+@Recorder
+public class TestRecorder {
+    public Supplier<ActiveResult> isFooActive() {
+        return () -> {
+            if (... should not be active ...) { // <1>
+                return ActiveResult.inactive("explanation"); // <2>
+            }
+            return ActiveResult.active();
+        };
+    }
+
+    public Function<SyntheticCreationalContext<Foo>, Foo> createFoo() {
+        return (context) -> {
+            return new Foo();
+        };
+    }
+}
+----
+<1> The condition when the synthetic bean should be inactive.
+<2> Proper explanation of why the bean is inactive.
+    Another inactive `ActiveResult` may also be provided as a cause, if this bean's inactivity stems from another bean's inactivity.
+
+If an inactive bean is injected somewhere, or is dynamically looked up, an `InactiveBeanException` is thrown.
+The error message contains the reason (from the `ActiveResult`), the cause chain (also from the `ActiveResult`), and possibly also a list of all injection points that resolve to this bean.
+
+If you want to handle the inactive case gracefully, you should always inject possibly inactive beans using `Instance<>`.
+You also need to check before obtaining the actual instance:
+
+[source,java]
+----
+import io.quarkus.arc.InjectableInstance;
+
+@Inject
+InjectableInstance<Foo> foo;
+
+if (foo.getHandle().getBean().isActive()) {
+    Foo foo = foo.get();
+    ...
+}
+----
+
+If you want to consume only active beans, you can inject an `InjectableInstance<>` and call `getActive()` to get the single instance or `listActive()` to get all instances:
+
+[source,java]
+----
+import io.quarkus.arc.InjectableInstance;
+
+@Inject
+@Any
+InjectableInstance<Foo> foos;
+
+for (Foo foo : foos.listActive())
+    ...
+}
+----
 
 [[synthetic_observers]]
 == Use Case - Synthetic Observers

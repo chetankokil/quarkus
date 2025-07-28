@@ -21,8 +21,7 @@ public interface DataSourceJdbcBuildTimeConfig {
     /**
      * The datasource driver class name
      */
-    @WithConverter(TrimmedStringConverter.class)
-    Optional<String> driver();
+    Optional<@WithConverter(TrimmedStringConverter.class) String> driver();
 
     /**
      * Whether we want to use regular JDBC transactions, XA, or disable all transactional capabilities.
@@ -35,14 +34,13 @@ public interface DataSourceJdbcBuildTimeConfig {
     /**
      * Enable datasource metrics collection. If unspecified, collecting metrics will be enabled by default if
      * a metrics extension is active.
+     * <p>
+     * Deprecated. This was used by the now deprecated quarkus-smallrye-metrics and will be removed soon.
+     * <p>
+     * Please use quarkus-micrometer and the quarkus.datasource.metrics.enabled property
      */
+    @Deprecated(forRemoval = true)
     Optional<Boolean> enableMetrics();
-
-    /**
-     * Enable JDBC tracing. Disabled by default.
-     */
-    @WithDefault("false")
-    boolean tracing();
 
     /**
      * Enable OpenTelemetry JDBC instrumentation.

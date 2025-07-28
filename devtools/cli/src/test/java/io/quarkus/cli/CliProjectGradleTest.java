@@ -25,7 +25,7 @@ import picocli.CommandLine;
  */
 public class CliProjectGradleTest {
     static final Path testProjectRoot = Paths.get(System.getProperty("user.dir")).toAbsolutePath()
-            .resolve("target/test-project/");
+            .resolve("target/test-classes/test-project/");
     static final Path workspaceRoot = testProjectRoot.resolve("CliProjectGradleTest");
     static final Path wrapperRoot = testProjectRoot.resolve("gradle-wrapper");
 
@@ -112,8 +112,8 @@ public class CliProjectGradleTest {
         String buildGradleContent = validateBasicGradleGroovyIdentifiers(project, CreateProjectHelper.DEFAULT_GROUP_ID,
                 CreateProjectHelper.DEFAULT_ARTIFACT_ID,
                 CreateProjectHelper.DEFAULT_VERSION);
-        Assertions.assertTrue(buildGradleContent.contains("quarkus-resteasy"),
-                "build/gradle should contain quarkus-resteasy:\n" + buildGradleContent);
+        Assertions.assertTrue(buildGradleContent.contains("quarkus-rest"),
+                "build/gradle should contain quarkus-rest:\n" + buildGradleContent);
 
         CliDriver.valdiateGeneratedSourcePackage(project, "org/acme");
 
@@ -144,8 +144,8 @@ public class CliProjectGradleTest {
         String buildGradleContent = validateBasicGradleKotlinIdentifiers(project, CreateProjectHelper.DEFAULT_GROUP_ID,
                 CreateProjectHelper.DEFAULT_ARTIFACT_ID,
                 CreateProjectHelper.DEFAULT_VERSION);
-        Assertions.assertTrue(buildGradleContent.contains("quarkus-resteasy"),
-                "build/gradle should contain quarkus-resteasy:\n" + buildGradleContent);
+        Assertions.assertTrue(buildGradleContent.contains("quarkus-rest"),
+                "build/gradle should contain quarkus-rest:\n" + buildGradleContent);
 
         Path packagePath = wrapperRoot.resolve("src/main/java/");
         Assertions.assertTrue(packagePath.toFile().isDirectory(),
@@ -168,7 +168,7 @@ public class CliProjectGradleTest {
                 "--package-name=custom.pkg",
                 "--output-directory=" + nested,
                 "--app-config=" + String.join(",", configs),
-                "-x resteasy-reactive",
+                "-x rest",
                 "silly:my-project:0.1.0");
 
         // TODO: would love a test that doesn't use a wrapper, but CI path..
@@ -180,8 +180,8 @@ public class CliProjectGradleTest {
         Assertions.assertTrue(project.resolve("gradlew").toFile().exists(),
                 "Wrapper should exist by default");
         String buildGradleContent = validateBasicGradleGroovyIdentifiers(project, "silly", "my-project", "0.1.0");
-        Assertions.assertTrue(buildGradleContent.contains("quarkus-resteasy-reactive"),
-                "build.gradle should contain quarkus-resteasy-reactive:\n" + buildGradleContent);
+        Assertions.assertTrue(buildGradleContent.contains("quarkus-rest"),
+                "build.gradle should contain quarkus-rest:\n" + buildGradleContent);
 
         CliDriver.valdiateGeneratedSourcePackage(project, "custom/pkg");
         CliDriver.validateApplicationProperties(project, configs);
@@ -259,8 +259,8 @@ public class CliProjectGradleTest {
         Assertions.assertFalse(result.stdout.contains("-x test"),
                 "gradle command should not specify '-x test'\n" + result);
 
-        Assertions.assertTrue(result.stdout.contains("-Dquarkus.package.type=native"),
-                "gradle command should specify -Dquarkus.package.type=native\n" + result);
+        Assertions.assertTrue(result.stdout.contains("-Dquarkus.native.enabled=true"),
+                "gradle command should specify -Dquarkus.native.enabled=true\n" + result);
 
         Assertions.assertTrue(result.stdout.contains("--offline"),
                 "gradle command should specify --offline\n" + result);
@@ -444,17 +444,17 @@ public class CliProjectGradleTest {
                 "build.gradle should exist: " + buildGradle.toAbsolutePath().toString());
 
         String buildContent = CliDriver.readFileAsString(buildGradle);
-        Assertions.assertTrue(buildContent.contains("group '" + group + "'"),
-                "build.gradle should include the group id:\n" + buildContent);
-        Assertions.assertTrue(buildContent.contains("version '" + version + "'"),
-                "build.gradle should include the version:\n" + buildContent);
+        Assertions.assertTrue(buildContent.contains("group = '" + group + "'"),
+                "build.gradle should include the group id: " + group + " but was:\n" + buildContent);
+        Assertions.assertTrue(buildContent.contains("version = '" + version + "'"),
+                "build.gradle should include the version: " + version + " but was:\n" + buildContent);
 
         Path settings = project.resolve("settings.gradle");
         Assertions.assertTrue(settings.toFile().exists(),
                 "settings.gradle should exist: " + settings.toAbsolutePath().toString());
         String settingsContent = CliDriver.readFileAsString(settings);
         Assertions.assertTrue(settingsContent.contains(artifact),
-                "settings.gradle should include the artifact id:\n" + settingsContent);
+                "settings.gradle should include the artifact id: " + artifact + " but was:\n" + settingsContent);
 
         return buildContent;
     }
@@ -466,16 +466,16 @@ public class CliProjectGradleTest {
 
         String buildContent = CliDriver.readFileAsString(buildGradle);
         Assertions.assertTrue(buildContent.contains("group = \"" + group + "\""),
-                "build.gradle.kts should include the group id:\n" + buildContent);
+                "build.gradle.kts should include the group id: " + group + " but was:\n" + buildContent);
         Assertions.assertTrue(buildContent.contains("version = \"" + version + "\""),
-                "build.gradle.kts should include the version:\n" + buildContent);
+                "build.gradle.kts should include the version: " + version + " but was:\n" + buildContent);
 
         Path settings = project.resolve("settings.gradle.kts");
         Assertions.assertTrue(settings.toFile().exists(),
                 "settings.gradle.kts should exist: " + settings.toAbsolutePath().toString());
         String settingsContent = CliDriver.readFileAsString(settings);
         Assertions.assertTrue(settingsContent.contains(artifact),
-                "settings.gradle.kts should include the artifact id:\n" + settingsContent);
+                "settings.gradle.kts should include the artifact id: " + artifact + " but was:\n" + settingsContent);
 
         return buildContent;
     }

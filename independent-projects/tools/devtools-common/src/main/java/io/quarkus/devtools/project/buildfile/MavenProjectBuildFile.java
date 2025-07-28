@@ -86,8 +86,8 @@ public class MavenProjectBuildFile extends BuildFile {
         final List<ArtifactCoords> importedPlatforms;
         final String quarkusVersion;
         if (projectPom == null) {
-            managedDeps = Collections.emptyList();
-            deps = () -> Collections.emptyList();
+            managedDeps = List.of();
+            deps = List::of;
             importedPlatforms = Collections.emptyList();
             // TODO allow multiple streams in the same catalog for now
             quarkusVersion = null;// defaultQuarkusVersion.get();
@@ -121,7 +121,7 @@ public class MavenProjectBuildFile extends BuildFile {
         }
         final MavenProjectBuildFile extensionManager = new MavenProjectBuildFile(projectDir, extensionCatalog,
                 projectModel, deps, managedDeps, projectProps, projectPom == null ? null : artifactResolver);
-        final List<ResourceLoader> codestartResourceLoaders = codestartLoadersBuilder().catalog(extensionCatalog)
+        final List<ResourceLoader> codestartResourceLoaders = codestartLoadersBuilder(log).catalog(extensionCatalog)
                 .artifactResolver(artifactResolver).build();
         final JavaVersion javaVersion = resolveJavaVersion(projectProps);
         return QuarkusProject.of(projectDir, extensionCatalog,
@@ -381,7 +381,7 @@ public class MavenProjectBuildFile extends BuildFile {
             return;
         }
         try {
-            model = ModelUtils.readModel(projectPom);
+            model = MojoUtils.readPom(projectPom.toFile());
         } catch (IOException e) {
             throw new RuntimeException("Failed to read " + projectPom, e);
         }

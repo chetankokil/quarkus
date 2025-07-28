@@ -18,6 +18,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import javax.sql.DataSource;
+
 import jakarta.enterprise.inject.Default;
 import jakarta.inject.Singleton;
 
@@ -25,13 +27,14 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.Location;
 import org.flywaydb.core.api.callback.Callback;
 import org.flywaydb.core.api.migration.JavaMigration;
+import org.flywaydb.core.extensibility.ConfigurationExtension;
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.ClassType;
 import org.jboss.jandex.DotName;
 import org.jboss.logging.Logger;
 
-import io.quarkus.agroal.runtime.DataSources;
+import io.quarkus.agroal.deployment.AgroalDataSourceBuildUtil;
 import io.quarkus.agroal.spi.JdbcDataSourceBuildItem;
 import io.quarkus.agroal.spi.JdbcDataSourceSchemaReadyBuildItem;
 import io.quarkus.agroal.spi.JdbcInitialSQLGeneratorBuildItem;
@@ -57,7 +60,7 @@ import io.quarkus.deployment.builditem.InitTaskCompletedBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
-import io.quarkus.deployment.logging.LoggingSetupBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.flyway.FlywayDataSource;
 import io.quarkus.flyway.runtime.FlywayBuildTimeConfig;
@@ -65,12 +68,12 @@ import io.quarkus.flyway.runtime.FlywayContainer;
 import io.quarkus.flyway.runtime.FlywayContainerProducer;
 import io.quarkus.flyway.runtime.FlywayDataSourceBuildTimeConfig;
 import io.quarkus.flyway.runtime.FlywayRecorder;
-import io.quarkus.flyway.runtime.FlywayRuntimeConfig;
 import io.quarkus.runtime.util.ClassPathUtils;
 
 @BuildSteps(onlyIf = FlywayEnabled.class)
 class FlywayProcessor {
 
+    private static final String MODEL_CLASS_SUFFIX = "Model";
     private static final String CLASSPATH_APPLICATION_MIGRATIONS_PROTOCOL = "classpath";
 
     private static final String FLYWAY_CONTAINER_BEAN_NAME_PREFIX = "flyway_container_";
@@ -79,6 +82,28 @@ class FlywayProcessor {
     private static final DotName JAVA_MIGRATION = DotName.createSimple(JavaMigration.class.getName());
 
     private static final Logger LOGGER = Logger.getLogger(FlywayProcessor.class);
+
+    @BuildStep
+    void reflection(CombinedIndexBuildItem index, BuildProducer<ReflectiveClassBuildItem> reflectiveClasses,
+            BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchyProducer) {
+        reflectiveClasses.produce(ReflectiveClassBuildItem.builder(ConfigurationExtension.class)
+                .reason(getClass().getName())
+                .fields().methods().build());
+
+        for (ClassInfo configurationExtension : index.getIndex().getAllKnownImplementors(ConfigurationExtension.class)) {
+            var extensionName = configurationExtension.name();
+            // we also register Model from the extension fields so that 'ConfigurationExtension#copy' works
+            var reflectiveHierarchyItem = ReflectiveHierarchyBuildItem
+                    .builder(extensionName)
+                    .ignoreTypePredicate(
+                            type -> !extensionName.equals(type) && !type.toString().endsWith(MODEL_CLASS_SUFFIX))
+                    .ignoreMethodPredicate(m -> !extensionName.equals(m.declaringClass().name()))
+                    .ignoreFieldPredicate(f -> !extensionName.equals(f.declaringClass().name())
+                            && !f.type().name().toString().endsWith(MODEL_CLASS_SUFFIX))
+                    .build();
+            reflectiveHierarchyProducer.produce(reflectiveHierarchyItem);
+        }
+    }
 
     @Record(STATIC_INIT)
     @BuildStep
@@ -95,10 +120,10 @@ class FlywayProcessor {
         Map<String, Collection<String>> applicationMigrationsToDs = new HashMap<>();
         for (var dataSourceName : dataSourceNames) {
             FlywayDataSourceBuildTimeConfig flywayDataSourceBuildTimeConfig = flywayBuildTimeConfig
-                    .getConfigForDataSourceName(dataSourceName);
+                    .datasources().get(dataSourceName);
 
             Collection<String> migrationLocations = discoverApplicationMigrations(
-                    flywayDataSourceBuildTimeConfig.locations);
+                    flywayDataSourceBuildTimeConfig.locations());
             applicationMigrationsToDs.put(dataSourceName, migrationLocations);
         }
         Set<String> datasourcesWithMigrations = new HashSet<>();
@@ -157,7 +182,6 @@ class FlywayProcessor {
 
     @BuildStep
     @Produce(SyntheticBeansRuntimeInitBuildItem.class)
-    @Consume(LoggingSetupBuildItem.class)
     @Record(ExecutionTime.RUNTIME_INIT)
     void createBeans(FlywayRecorder recorder,
             List<JdbcDataSourceBuildItem> jdbcDataSourceBuildItems,
@@ -187,7 +211,10 @@ class FlywayProcessor {
                     .setRuntimeInit()
                     .unremovable()
                     .addInjectionPoint(ClassType.create(DotName.createSimple(FlywayContainerProducer.class)))
-                    .addInjectionPoint(ClassType.create(DotName.createSimple(DataSources.class)))
+                    .addInjectionPoint(ClassType.create(DotName.createSimple(DataSource.class)),
+                            AgroalDataSourceBuildUtil.qualifier(dataSourceName))
+                    .startup()
+                    .checkActive(recorder.flywayCheckActiveSupplier(dataSourceName))
                     .createWith(recorder.flywayContainerFunction(dataSourceName, hasMigrations, createPossible));
 
             AnnotationInstance flywayContainerQualifier;
@@ -221,6 +248,8 @@ class FlywayProcessor {
                     .setRuntimeInit()
                     .unremovable()
                     .addInjectionPoint(ClassType.create(DotName.createSimple(FlywayContainer.class)), flywayContainerQualifier)
+                    .startup()
+                    .checkActive(recorder.flywayCheckActiveSupplier(dataSourceName))
                     .createWith(recorder.flywayFunction(dataSourceName));
 
             if (DataSourceUtil.isDefault(dataSourceName)) {
@@ -243,7 +272,6 @@ class FlywayProcessor {
     @Consume(BeanContainerBuildItem.class)
     @Record(ExecutionTime.RUNTIME_INIT)
     public ServiceStartBuildItem startActions(FlywayRecorder recorder,
-            FlywayRuntimeConfig config,
             BuildProducer<JdbcDataSourceSchemaReadyBuildItem> schemaReadyBuildItem,
             BuildProducer<InitTaskCompletedBuildItem> initializationCompleteBuildItem,
             List<JdbcDataSourceBuildItem> jdbcDataSourceBuildItems,
@@ -266,8 +294,8 @@ class FlywayProcessor {
     public InitTaskBuildItem configureInitTask(ApplicationInfoBuildItem app) {
         return InitTaskBuildItem.create()
                 .withName(app.getName() + "-flyway-init")
-                .withTaskEnvVars(Map.of("QUARKUS_INIT_AND_EXIT", "true", "QUARKUS_FLYWAY_ENABLED", "true"))
-                .withAppEnvVars(Map.of("QUARKUS_FLYWAY_ENABLED", "false"))
+                .withTaskEnvVars(Map.of("QUARKUS_INIT_AND_EXIT", "true", "QUARKUS_FLYWAY_ACTIVE", "true"))
+                .withAppEnvVars(Map.of("QUARKUS_FLYWAY_ACTIVE", "false"))
                 .withSharedEnvironment(true)
                 .withSharedFilesystem(true);
     }

@@ -73,6 +73,12 @@ public class BuildMojo extends QuarkusBootstrapMojo {
     @Parameter(property = "attachRunnerAsMainArtifact", required = false)
     boolean attachRunnerAsMainArtifact;
 
+    /**
+     * Whether to attach SBOMs generated for Uber JARs as project artifacts
+     */
+    @Parameter(property = "attachSboms")
+    boolean attachSboms = true;
+
     @Parameter(defaultValue = "${project.build.directory}", readonly = true)
     File buildDirectory;
 
@@ -108,6 +114,10 @@ public class BuildMojo extends QuarkusBootstrapMojo {
             // Add the system properties of the plugin to the system properties
             // if and only if they are not already set.
             for (Map.Entry<String, String> entry : systemProperties.entrySet()) {
+                if (entry.getValue() == null) {
+                    continue;
+                }
+
                 String key = entry.getKey();
                 if (System.getProperty(key) == null) {
                     System.setProperty(key, entry.getValue());
@@ -115,11 +125,8 @@ public class BuildMojo extends QuarkusBootstrapMojo {
                 }
             }
 
-            // Essentially what this does is to enable the native package type even if a different package type is set
-            // in application properties. This is done to preserve what users expect to happen when
-            // they execute "mvn package -Dnative" even if quarkus.package.type has been set in application.properties
-            if (setPackageTypeSystemPropertyIfNativeProfileEnabled()) {
-                propertiesToClear.add(PACKAGE_TYPE_PROP);
+            if (setNativeEnabledIfNativeProfileEnabled()) {
+                propertiesToClear.add("quarkus.native.enabled");
             }
 
             if (!propertiesToClear.isEmpty() && mavenSession().getRequest().getDegreeOfConcurrency() > 1) {
@@ -167,6 +174,12 @@ public class BuildMojo extends QuarkusBootstrapMojo {
                         } else {
                             projectHelper.attachArtifact(mavenProject(), result.getJar().getPath().toFile(),
                                     result.getJar().getClassifier());
+                        }
+                    }
+                    if (attachSboms && result.getJar().isUberJar() && !result.getJar().getSboms().isEmpty()) {
+                        for (var sbom : result.getJar().getSboms()) {
+                            projectHelper.attachArtifact(mavenProject(), sbom.getFormat(), sbom.getClassifier(),
+                                    sbom.getSbomFile().toFile());
                         }
                     }
                 }

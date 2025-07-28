@@ -30,16 +30,16 @@ public class DynamicVerificationKeyResolver {
             HeaderParameterNames.X509_CERTIFICATE_SHA256_THUMBPRINT,
             HeaderParameterNames.X509_CERTIFICATE_THUMBPRINT);
 
-    private final OidcProviderClient client;
+    private final OidcProviderClientImpl client;
     private final MemoryCache<Key> cache;
     final CertChainPublicKeyResolver chainResolverFallback;
 
-    public DynamicVerificationKeyResolver(OidcProviderClient client, OidcTenantConfig config) {
+    public DynamicVerificationKeyResolver(OidcProviderClientImpl client, OidcTenantConfig config) {
         this.client = client;
-        this.cache = new MemoryCache<Key>(client.getVertx(), config.jwks.cleanUpTimerInterval,
-                config.jwks.cacheTimeToLive, config.jwks.cacheSize);
-        if (config.certificateChain.trustStoreFile.isPresent()) {
-            chainResolverFallback = new CertChainPublicKeyResolver(config.certificateChain);
+        this.cache = new MemoryCache<Key>(client.getVertx(), config.jwks().cleanUpTimerInterval(),
+                config.jwks().cacheTimeToLive(), config.jwks().cacheSize());
+        if (config.certificateChain().trustStoreFile().isPresent()) {
+            chainResolverFallback = new CertChainPublicKeyResolver(config);
         } else {
             chainResolverFallback = null;
         }
@@ -114,6 +114,12 @@ public class DynamicVerificationKeyResolver {
                         if (newKey == null && kid == null && thumbprint == null) {
                             newKey = jwks.getKeyWithoutKeyIdAndThumbprint("RSA");
                         }
+
+                        //                        if (newKey == null && tryAll && kid == null && thumbprint == null) {
+                        //                            LOG.debug("JWK is not available, neither 'kid' nor 'x5t#S256' nor 'x5t' token headers are set,"
+                        //                                    + " falling back to trying all available keys");
+                        //                            newKey = jwks.findKeyInAllKeys(jws); // there is nothing to check the signature for in this method
+                        //                        }
 
                         if (newKey == null && chainResolverFallback != null) {
                             return getChainResolver();

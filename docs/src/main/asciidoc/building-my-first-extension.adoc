@@ -29,6 +29,12 @@ Keep in mind it's not representative of the power of moving things to build time
 :prerequisites-no-graalvm:
 include::{includes}/prerequisites.adoc[]
 
+[CAUTION]
+====
+Writing extension with any other than Java and Maven has **not** been tested by the Quarkus team so your mileage may vary
+if you stray off this path
+====
+
 == Basic Concepts
 
 First things first, we will need to start with some basic concepts.
@@ -165,7 +171,7 @@ Your extension is a multi-module project. So let's start by checking out the par
     <module>runtime</module>
   </modules>
   <properties>
-    <compiler-plugin.version>3.12.1</compiler-plugin.version><!--2-->
+    <compiler-plugin.version>3.14.0</compiler-plugin.version><!--2-->
     <failsafe-plugin.version>${surefire-plugin.version}</failsafe-plugin.version>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -213,9 +219,7 @@ Your extension is a multi-module project. So let's start by checking out the par
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${compiler-plugin.version}</version>
           <configuration>
-            <compilerArgs>
-              <arg>-parameters</arg><!--5-->
-            </compilerArgs>
+            <parameters>true</parameters>
           </configuration>
         </plugin>
       </plugins>
@@ -228,7 +232,6 @@ Your extension is a multi-module project. So let's start by checking out the par
 <2> Quarkus requires a recent version of the Maven compiler plugin supporting the annotationProcessorPaths configuration.
 <3> The `quarkus-bom` aligns your dependencies with those used by Quarkus during the augmentation phase.
 <4> Quarkus requires these configs to run tests properly.
-<5> Setting the `parameters` flag this way works around https://issues.apache.org/jira/browse/MCOMPILER-413[MCOMPILER-413].
 
 ==== The Deployment module
 
@@ -788,7 +791,7 @@ Edsger W. Dijkstra
 ==== Debugging your application build
 
 Since your extension deployment is made during the application build, this process is triggered by your build tool.
-That means if you want to debug this phase you need to launch your build tool with the remote debug mode switched one.
+That means if you want to debug this phase you need to launch your build tool with the remote debug mode switched on.
 
 ===== Maven
 
@@ -797,7 +800,7 @@ You can launch your application with the following command line:
 
 [source,bash]
 ----
-mvnDebug clean compile quarkus:dev
+mvnDebug quarkus:dev
 ----
 
 By default, Maven will wait for a connection on `localhost:8000`.
@@ -862,22 +865,14 @@ Run the application and notice the `Installed Features` list contains the `greet
 
 [source,shell,subs=attributes+]
 ----
-$ mvn clean compile quarkus:dev
+$ mvn quarkus:dev
 [INFO] Scanning for projects...
 [INFO]
 [INFO] -----------------------< org.acme:greeting-app >------------------------
 [INFO] Building greeting-app 1.0.0-SNAPSHOT
 [INFO] --------------------------------[ jar ]---------------------------------
 [INFO]
-[INFO] --- maven-clean-plugin:2.5:clean (default-clean) @ greeting-app ---
-[INFO]
-[INFO] --- quarkus-maven-plugin:{quarkus-version}:generate-code (default) @ greeting-app ---
-[INFO]
-[INFO] --- maven-resources-plugin:2.6:resources (default-resources) @ greeting-app ---
-[INFO] Using 'UTF-8' encoding to copy filtered resources.
-[INFO] Copying 1 resource
-[INFO]
-[INFO] --- maven-compiler-plugin:3.12.1:compile (default-compile) @ greeting-app ---
+[INFO] --- maven-compiler-plugin:3.14.0:compile (default-compile) @ greeting-app ---
 [INFO] Nothing to compile - all classes are up to date
 [INFO]
 [INFO] --- quarkus-maven-plugin:{quarkus-version}:dev (default-cli) @ greeting-app ---
@@ -886,9 +881,9 @@ __  ____  __  _____   ___  __ ____  ______
  --/ __ \/ / / / _ | / _ \/ //_/ / / / __/
  -/ /_/ / /_/ / __ |/ , _/ ,< / /_/ /\ \
 --\___\_\____/_/ |_/_/|_/_/|_|\____/___/
-2021-01-27 10:28:07,240 INFO  [io.quarkus] (Quarkus Main Thread) greeting-app 1.0.0-SNAPSHOT on JVM (powered by Quarkus {quarkus-version}) started in 0.531s. Listening on: http://localhost:8080
-2021-01-27 10:28:07,242 INFO  [io.quarkus] (Quarkus Main Thread) Profile dev activated. Live Coding activated.
-2021-01-27 10:28:07,243 INFO  [io.quarkus] (Quarkus Main Thread) Installed features: [cdi, greeting-extension, servlet]
+2022-11-20 04:25:36,885 INFO  [io.quarkus] (Quarkus Main Thread) greeting-app 1.0.0-SNAPSHOT on JVM (powered by Quarkus {quarkus-version}) started in 4.591s. Listening on: http://localhost:8080
+2022-11-20 04:25:36,911 INFO  [io.quarkus] (Quarkus Main Thread) Profile dev activated. Live Coding activated.
+2022-11-20 04:25:36,913 INFO  [io.quarkus] (Quarkus Main Thread) Installed features: [cdi, greetin-extension, resteasy-reactive, smallrye-context-propagation, vertx]
 ----
 
 From an extension developer standpoint the Maven publication strategy is very handy and fast but Quarkus wants to go one step further by also ensuring a reliability of the ecosystem for the people who will use the extensions.

@@ -1,5 +1,7 @@
 package io.quarkus.vertx.core.runtime;
 
+import static io.vertx.core.file.impl.FileResolverImpl.CACHE_DIR_BASE_PROP_NAME;
+
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -14,7 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.runtime.LaunchMode;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ThreadPoolConfig;
+import io.quarkus.runtime.configuration.DurationConverter;
 import io.quarkus.vertx.core.runtime.VertxCoreRecorder.VertxOptionsCustomizer;
 import io.quarkus.vertx.core.runtime.config.AddressResolverConfiguration;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
@@ -34,7 +38,7 @@ public class VertxCoreProducerTest {
 
     @BeforeEach
     public void setUp() throws Exception {
-        recorder = new VertxCoreRecorder();
+        recorder = new VertxCoreRecorder(new RuntimeValue<>(), new RuntimeValue<>());
     }
 
     @AfterEach
@@ -100,7 +104,7 @@ public class VertxCoreProducerTest {
 
         try {
 
-            VertxCoreRecorder.initialize(configuration, null, ThreadPoolConfig.empty(), null, LaunchMode.TEST);
+            VertxCoreRecorder.initialize(configuration, null, new DefaultThreadPoolConfig(), null, LaunchMode.TEST);
             Assertions.fail("It should not have a cluster manager on the classpath, and so fail the creation");
         } catch (IllegalStateException e) {
             Assertions.assertTrue(e.getMessage().contains("No ClusterManagerFactory"),
@@ -139,6 +143,51 @@ public class VertxCoreProducerTest {
                     public int cacheMaxTimeToLive() {
                         return 3;
                     }
+
+                    @Override
+                    public Optional<String> hostsPath() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public int hostRefreshPeriod() {
+                        return 0;
+                    }
+
+                    @Override
+                    public Optional<List<String>> servers() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public boolean optResourceEnabled() {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean rdFlag() {
+                        return false;
+                    }
+
+                    @Override
+                    public Optional<List<String>> searchDomains() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public int ndots() {
+                        return 0;
+                    }
+
+                    @Override
+                    public Optional<Boolean> rotateServers() {
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public boolean roundRobinInetAddress() {
+                        return false;
+                    }
                 };
             }
         };
@@ -157,7 +206,7 @@ public class VertxCoreProducerTest {
                     }
                 }));
 
-        VertxCoreRecorder.initialize(configuration, customizers, ThreadPoolConfig.empty(), null, LaunchMode.TEST);
+        VertxCoreRecorder.initialize(configuration, customizers, new DefaultThreadPoolConfig(), null, LaunchMode.TEST);
     }
 
     @Test
@@ -170,16 +219,39 @@ public class VertxCoreProducerTest {
                         called.set(true);
                     }
                 }));
-        Vertx v = VertxCoreRecorder.initialize(new DefaultVertxConfiguration(), customizers, ThreadPoolConfig.empty(),
+        Vertx v = VertxCoreRecorder.initialize(new DefaultVertxConfiguration(), customizers, new DefaultThreadPoolConfig(),
                 null,
                 LaunchMode.TEST);
         Assertions.assertTrue(called.get(), "Customizer should get called during initialization");
+    }
+
+    @Test
+    public void vertxCacheDirectoryBySystemProperty() {
+        final String cacheDir = System.getProperty("user.dir");
+        try {
+            System.setProperty(CACHE_DIR_BASE_PROP_NAME, cacheDir);
+            VertxOptionsCustomizer customizers = new VertxOptionsCustomizer(List.of(
+                    vertxOptions -> {
+                        Assertions.assertNotNull(vertxOptions.getFileSystemOptions());
+                        Assertions.assertEquals(cacheDir, vertxOptions.getFileSystemOptions().getFileCacheDir());
+                    }));
+            VertxCoreRecorder.initialize(new DefaultVertxConfiguration(), customizers, new DefaultThreadPoolConfig(),
+                    null,
+                    LaunchMode.TEST);
+        } finally {
+            System.clearProperty(CACHE_DIR_BASE_PROP_NAME);
+        }
     }
 
     private static class DefaultVertxConfiguration implements VertxConfiguration {
         @Override
         public boolean caching() {
             return true;
+        }
+
+        @Override
+        public Optional<String> cacheDirectory() {
+            return Optional.empty();
         }
 
         @Override
@@ -517,12 +589,104 @@ public class VertxCoreProducerTest {
                 public int cacheMaxTimeToLive() {
                     return Integer.MAX_VALUE;
                 }
+
+                @Override
+                public Optional<String> hostsPath() {
+                    return Optional.empty();
+                }
+
+                @Override
+                public int hostRefreshPeriod() {
+                    return 0;
+                }
+
+                @Override
+                public Optional<List<String>> servers() {
+                    return Optional.empty();
+                }
+
+                @Override
+                public boolean optResourceEnabled() {
+                    return false;
+                }
+
+                @Override
+                public boolean rdFlag() {
+                    return false;
+                }
+
+                @Override
+                public Optional<List<String>> searchDomains() {
+                    return Optional.empty();
+                }
+
+                @Override
+                public int ndots() {
+                    return 0;
+                }
+
+                @Override
+                public Optional<Boolean> rotateServers() {
+                    return Optional.empty();
+                }
+
+                @Override
+                public boolean roundRobinInetAddress() {
+                    return false;
+                }
             };
         }
 
         @Override
         public boolean preferNativeTransport() {
             return false;
+        }
+    }
+
+    static class DefaultThreadPoolConfig implements ThreadPoolConfig {
+        @Override
+        public int coreThreads() {
+            return 0;
+        }
+
+        @Override
+        public boolean prefill() {
+            return true;
+        }
+
+        @Override
+        public OptionalInt maxThreads() {
+            return OptionalInt.empty();
+        }
+
+        @Override
+        public OptionalInt queueSize() {
+            return OptionalInt.empty();
+        }
+
+        @Override
+        public float growthResistance() {
+            return 0;
+        }
+
+        @Override
+        public Duration shutdownTimeout() {
+            return DurationConverter.parseDuration("1M");
+        }
+
+        @Override
+        public Duration shutdownInterrupt() {
+            return DurationConverter.parseDuration("10");
+        }
+
+        @Override
+        public Optional<Duration> shutdownCheckInterval() {
+            return Optional.empty();
+        }
+
+        @Override
+        public Duration keepAliveTime() {
+            return DurationConverter.parseDuration("5");
         }
     }
 }

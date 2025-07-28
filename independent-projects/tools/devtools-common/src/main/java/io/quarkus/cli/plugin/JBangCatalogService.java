@@ -66,7 +66,7 @@ public class JBangCatalogService extends CatalogService<JBangCatalog> {
     /**
      * Read the {@link JBangCatalog} from project or fallback to global catalog.
      *
-     * @param ouput an {@link OutputOptionMixin} that can be used for tests to
+     * @param output an {@link OutputOptionMixin} that can be used for tests to
      *        substitute current dir with a test directory.
      * @param projectDir An optional path pointing to the project directory.
      * @param userdir An optional path pointing to the user directory
@@ -128,7 +128,7 @@ public class JBangCatalogService extends CatalogService<JBangCatalog> {
         try {
             lines.addAll(jbang.execute("alias", "list", "--verbose", remoteCatalog));
         } catch (Exception e) {
-            this.output.debug("Failed to list aliases from remote catalog: " + remoteCatalog + ". Ignorning.");
+            this.output.debug("Failed to list aliases from remote catalog: " + remoteCatalog + ". Ignoring.");
         }
 
         return readAliases(lines);
@@ -141,7 +141,7 @@ public class JBangCatalogService extends CatalogService<JBangCatalog> {
                 localCatalogs.add(catalog.substring(0, catalog.indexOf(" ")));
             }
         } catch (Exception e) {
-            this.output.debug("Failed to list jbang catalogs. Ignoring.");
+            this.output.debug("Failed to list JBang catalogs. Ignoring.");
         }
 
         //If there are locally installed catalogs, then go through every single one of them

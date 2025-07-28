@@ -12,11 +12,9 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.elytron.security.deployment.ElytronPasswordMarkerBuildItem;
 import io.quarkus.elytron.security.deployment.SecurityRealmBuildItem;
-import io.quarkus.elytron.security.runtime.ElytronPropertiesFileRecorder;
-import io.quarkus.elytron.security.runtime.MPRealmConfig;
-import io.quarkus.elytron.security.runtime.MPRealmRuntimeConfig;
-import io.quarkus.elytron.security.runtime.PropertiesRealmConfig;
-import io.quarkus.elytron.security.runtime.SecurityUsersConfig;
+import io.quarkus.elytron.security.properties.runtime.ElytronPropertiesFileRecorder;
+import io.quarkus.elytron.security.properties.runtime.PropertiesRealmConfig;
+import io.quarkus.elytron.security.properties.runtime.SecurityUsersConfig;
 import io.quarkus.runtime.RuntimeValue;
 
 /**
@@ -29,10 +27,6 @@ import io.quarkus.runtime.RuntimeValue;
  */
 class ElytronPropertiesProcessor {
     private static final Logger log = Logger.getLogger(ElytronPropertiesProcessor.class.getName());
-    /** Prefix for the user to password mapping properties */
-    private static final String USERS_PREFIX = "quarkus.security.embedded.users";
-    /** Prefix for the user to password mapping properties */
-    private static final String ROLES_PREFIX = "quarkus.security.embedded.roles";
 
     SecurityUsersConfig propertiesConfig;
 
@@ -57,31 +51,29 @@ class ElytronPropertiesProcessor {
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     void configureFileRealmAuthConfig(ElytronPropertiesFileRecorder recorder,
-            BuildProducer<NativeImageResourceBuildItem> resources,
             BuildProducer<SecurityRealmBuildItem> securityRealm) throws Exception {
-        if (propertiesConfig.file.enabled) {
-            PropertiesRealmConfig realmConfig = propertiesConfig.file;
-            log.debugf("Configuring from PropertiesRealmConfig, users=%s, roles=%s", realmConfig.users,
-                    realmConfig.roles);
+        if (propertiesConfig.file().enabled()) {
+            PropertiesRealmConfig realmConfig = propertiesConfig.file();
+            log.debugf("Configuring from PropertiesRealmConfig, users=%s, roles=%s", realmConfig.users(),
+                    realmConfig.roles());
             // Have the runtime recorder create the LegacyPropertiesSecurityRealm and create the build item
-            RuntimeValue<SecurityRealm> realm = recorder.createRealm(realmConfig);
-            securityRealm
-                    .produce(new SecurityRealmBuildItem(realm, realmConfig.realmName, recorder.loadRealm(realm, realmConfig)));
+            RuntimeValue<SecurityRealm> realm = recorder.createRealm();
+            securityRealm.produce(new SecurityRealmBuildItem(realm, realmConfig.realmName(), recorder.loadRealm(realm)));
             // Return the realm authentication mechanism build item
         }
     }
 
     @BuildStep
-    void nativeResource(BuildProducer<NativeImageResourceBuildItem> resources) throws Exception {
-        if (propertiesConfig.file.enabled) {
-            PropertiesRealmConfig realmConfig = propertiesConfig.file;
-            resources.produce(new NativeImageResourceBuildItem(realmConfig.users, realmConfig.roles));
+    void nativeResource(BuildProducer<NativeImageResourceBuildItem> resources) {
+        if (propertiesConfig.file().enabled()) {
+            PropertiesRealmConfig realmConfig = propertiesConfig.file();
+            resources.produce(new NativeImageResourceBuildItem(realmConfig.users(), realmConfig.roles()));
         }
     }
 
     @BuildStep
     ElytronPasswordMarkerBuildItem marker() {
-        if (propertiesConfig.file.enabled || propertiesConfig.embedded.enabled) {
+        if (propertiesConfig.file().enabled() || propertiesConfig.embedded().enabled()) {
             return new ElytronPasswordMarkerBuildItem();
         }
         return null;
@@ -101,16 +93,12 @@ class ElytronPropertiesProcessor {
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     void configureMPRealmConfig(ElytronPropertiesFileRecorder recorder,
-            BuildProducer<SecurityRealmBuildItem> securityRealm,
-            MPRealmRuntimeConfig runtimeConfig) throws Exception {
-        if (propertiesConfig.embedded.enabled) {
-            MPRealmConfig realmConfig = propertiesConfig.embedded;
+            BuildProducer<SecurityRealmBuildItem> securityRealm) throws Exception {
+        if (propertiesConfig.embedded().enabled()) {
             log.info("Configuring from MPRealmConfig");
-
-            RuntimeValue<SecurityRealm> realm = recorder.createRealm(realmConfig);
-            securityRealm
-                    .produce(new SecurityRealmBuildItem(realm, realmConfig.realmName,
-                            recorder.loadRealm(realm, realmConfig, runtimeConfig)));
+            RuntimeValue<SecurityRealm> realm = recorder.createEmbeddedRealm();
+            securityRealm.produce(new SecurityRealmBuildItem(realm, propertiesConfig.embedded().realmName(),
+                    recorder.loadEmbeddedRealm(realm)));
         }
     }
 }

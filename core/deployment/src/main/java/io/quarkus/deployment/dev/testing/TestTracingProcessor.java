@@ -25,10 +25,9 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
-import io.quarkus.bootstrap.classloading.ClassPathElement;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.deployment.IsDevelopment;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsProduction;
 import io.quarkus.deployment.IsTest;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -57,7 +56,7 @@ import io.quarkus.gizmo.Gizmo;
  */
 public class TestTracingProcessor {
 
-    @BuildStep(onlyIfNot = IsNormal.class)
+    @BuildStep(onlyIfNot = IsProduction.class)
     LogCleanupFilterBuildItem handle() {
         return new LogCleanupFilterBuildItem("org.junit.platform.launcher.core.EngineDiscoveryOrchestrator", "0 containers");
     }
@@ -75,8 +74,8 @@ public class TestTracingProcessor {
     @Produce(ServiceStartBuildItem.class)
     void startTesting(TestConfig config, LiveReloadBuildItem liveReloadBuildItem,
             LaunchModeBuildItem launchModeBuildItem, List<TestListenerBuildItem> testListenerBuildItems) {
-        if (TestSupport.instance().isEmpty() || config.continuousTesting == TestConfig.Mode.DISABLED
-                || config.flatClassPath) {
+        if (TestSupport.instance().isEmpty() || config.continuousTesting() == TestConfig.Mode.DISABLED
+                || config.flatClassPath()) {
             return;
         }
         DevModeType devModeType = launchModeBuildItem.getDevModeType().orElse(null);
@@ -92,18 +91,22 @@ public class TestTracingProcessor {
             testSupport.addListener(i.listener);
         }
         testSupport.setConfig(config);
-        testSupport.setTags(config.includeTags.orElse(Collections.emptyList()),
-                config.excludeTags.orElse(Collections.emptyList()));
-        testSupport.setPatterns(config.includePattern.orElse(null),
-                config.excludePattern.orElse(null));
-        testSupport.setEngines(config.includeEngines.orElse(Collections.emptyList()),
-                config.excludeEngines.orElse(Collections.emptyList()));
-        testSupport.setConfiguredDisplayTestOutput(config.displayTestOutput);
-        testSupport.setTestType(config.type);
+        testSupport.setTags(config.includeTags().orElse(Collections.emptyList()),
+                config.excludeTags().orElse(Collections.emptyList()));
+        testSupport.setPatterns(config.includePattern().orElse(null),
+                config.excludePattern().orElse(null));
+        String specificSelection = System.getProperty("quarkus-internal.test.specific-selection");
+        if (specificSelection != null) {
+            testSupport.setSpecificSelection(specificSelection);
+        }
+        testSupport.setEngines(config.includeEngines().orElse(Collections.emptyList()),
+                config.excludeEngines().orElse(Collections.emptyList()));
+        testSupport.setConfiguredDisplayTestOutput(config.displayTestOutput());
+        testSupport.setTestType(config.type());
         if (!liveReloadBuildItem.isLiveReload()) {
-            if (config.continuousTesting == TestConfig.Mode.ENABLED) {
+            if (config.continuousTesting() == TestConfig.Mode.ENABLED) {
                 testSupport.start();
-            } else if (config.continuousTesting == TestConfig.Mode.PAUSED) {
+            } else if (config.continuousTesting() == TestConfig.Mode.PAUSED) {
                 testSupport.stop();
             }
         }
@@ -122,7 +125,7 @@ public class TestTracingProcessor {
         for (ClassInfo clazz : combinedIndexBuildItem.getIndex().getKnownClasses()) {
             String theClassName = clazz.name().toString();
             if (isAppClass(theClassName)) {
-                transformerProducer.produce(new BytecodeTransformerBuildItem.Builder().setEager(false)
+                transformerProducer.produce(new BytecodeTransformerBuildItem.Builder()
                         .setClassToTransform(theClassName)
                         .setVisitorFunction(
                                 new BiFunction<String, ClassVisitor, ClassVisitor>() {
@@ -155,13 +158,8 @@ public class TestTracingProcessor {
         return null;
     }
 
-    public boolean isAppClass(String theClassName) {
-        QuarkusClassLoader cl = (QuarkusClassLoader) Thread.currentThread()
-                .getContextClassLoader();
-        //if the class file is present in this (and not the parent) CL then it is an application class
-        List<ClassPathElement> res = cl
-                .getElementsWithResource(theClassName.replace(".", "/") + ".class", true);
-        return !res.isEmpty();
+    public boolean isAppClass(String className) {
+        return QuarkusClassLoader.isApplicationClass(className);
     }
 
     public static class TracingClassVisitor extends ClassVisitor {

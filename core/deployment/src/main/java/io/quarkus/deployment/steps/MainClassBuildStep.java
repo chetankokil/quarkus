@@ -8,6 +8,7 @@ import java.io.File;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,7 @@ import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.GeneratedRuntimeSystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.JavaLibraryPathAdditionalPathBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LiveReloadBuildItem;
@@ -57,11 +59,10 @@ import io.quarkus.deployment.builditem.RecordableConstructorBuildItem;
 import io.quarkus.deployment.builditem.StaticBytecodeRecorderBuildItem;
 import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveFieldBuildItem;
 import io.quarkus.deployment.configuration.RunTimeConfigurationGenerator;
 import io.quarkus.deployment.naming.NamingConfig;
 import io.quarkus.deployment.pkg.PackageConfig;
-import io.quarkus.deployment.pkg.builditem.AppCDSControlPointBuildItem;
-import io.quarkus.deployment.pkg.builditem.AppCDSRequestedBuildItem;
 import io.quarkus.deployment.recording.BytecodeRecorderImpl;
 import io.quarkus.dev.appstate.ApplicationStateNotification;
 import io.quarkus.dev.console.QuarkusConsole;
@@ -76,7 +77,6 @@ import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
 import io.quarkus.runtime.Application;
-import io.quarkus.runtime.ApplicationLifecycleManager;
 import io.quarkus.runtime.ExecutionModeManager;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.NativeImageRuntimePropertiesRecorder;
@@ -86,9 +86,7 @@ import io.quarkus.runtime.QuarkusApplication;
 import io.quarkus.runtime.StartupContext;
 import io.quarkus.runtime.StartupTask;
 import io.quarkus.runtime.annotations.QuarkusMain;
-import io.quarkus.runtime.appcds.AppCDSUtil;
 import io.quarkus.runtime.configuration.ConfigUtils;
-import io.quarkus.runtime.configuration.ProfileManager;
 import io.quarkus.runtime.util.StepTiming;
 
 public class MainClassBuildStep {
@@ -97,6 +95,9 @@ public class MainClassBuildStep {
     static final String STARTUP_CONTEXT = "STARTUP_CONTEXT";
     static final String LOG = "LOG";
     static final String JAVA_LIBRARY_PATH = "java.library.path";
+    // This is declared as a constant so that it can be grepped for in the native-image binary using `strings`, e.g.:
+    // strings ./target/quarkus-runner | grep "__quarkus_analytics__quarkus.version="
+    public static final String QUARKUS_ANALYTICS_QUARKUS_VERSION = "__QUARKUS_ANALYTICS_QUARKUS_VERSION";
 
     public static final String GENERATE_APP_CDS_SYSTEM_PROPERTY = "quarkus.appcds.generate";
 
@@ -126,6 +127,7 @@ public class MainClassBuildStep {
             List<ObjectSubstitutionBuildItem> substitutions,
             List<MainBytecodeRecorderBuildItem> mainMethod,
             List<SystemPropertyBuildItem> properties,
+            List<GeneratedRuntimeSystemPropertyBuildItem> generatedRuntimeSystemProperties,
             List<JavaLibraryPathAdditionalPathBuildItem> javaLibraryPathAdditionalPaths,
             List<FeatureBuildItem> features,
             BuildProducer<ApplicationClassNameBuildItem> appClassNameProducer,
@@ -137,8 +139,6 @@ public class MainClassBuildStep {
             LiveReloadBuildItem liveReloadBuildItem,
             ApplicationInfoBuildItem applicationInfo,
             List<AllowJNDIBuildItem> allowJNDIBuildItems,
-            Optional<AppCDSRequestedBuildItem> appCDSRequested,
-            Optional<AppCDSControlPointBuildItem> appCDSControlPoint,
             NamingConfig namingConfig) {
 
         appClassNameProducer.produce(new ApplicationClassNameBuildItem(Application.APP_CLASS_NAME));
@@ -156,6 +156,9 @@ public class MainClassBuildStep {
         FieldCreator scField = file.getFieldCreator(STARTUP_CONTEXT_FIELD);
         scField.setModifiers(Modifier.PUBLIC | Modifier.STATIC);
 
+        FieldCreator quarkusVersionField = file.getFieldCreator(QUARKUS_ANALYTICS_QUARKUS_VERSION, String.class)
+                .setModifiers(Modifier.PRIVATE | Modifier.STATIC | Modifier.FINAL);
+
         MethodCreator ctor = file.getMethodCreator("<init>", void.class);
         ctor.invokeSpecialMethod(ofMethod(Application.class, "<init>", void.class, boolean.class),
                 ctor.getThis(), ctor.load(launchMode.isAuxiliaryApplication()));
@@ -163,19 +166,21 @@ public class MainClassBuildStep {
 
         MethodCreator mv = file.getMethodCreator("<clinit>", void.class);
         mv.setModifiers(Modifier.PUBLIC | Modifier.STATIC);
-        if (!namingConfig.enableJndi && allowJNDIBuildItems.isEmpty()) {
+        if (!namingConfig.enableJndi() && allowJNDIBuildItems.isEmpty()) {
             mv.invokeStaticMethod(ofMethod(DisabledInitialContextManager.class, "register", void.class));
         }
 
-        //very first thing is to set system props (for build time)
-        for (SystemPropertyBuildItem i : properties) {
+        // very first thing is to set system props (for build time)
+        // make sure we record the system properties in order for build reproducibility
+        for (SystemPropertyBuildItem i : properties.stream().sorted(Comparator.comparing(SystemPropertyBuildItem::getKey))
+                .toList()) {
             mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
                     mv.load(i.getKey()), mv.load(i.getValue()));
         }
         //set the launch mode
         ResultHandle lm = mv
                 .readStaticField(FieldDescriptor.of(LaunchMode.class, launchMode.getLaunchMode().name(), LaunchMode.class));
-        mv.invokeStaticMethod(ofMethod(ProfileManager.class, "setLaunchMode", void.class, LaunchMode.class),
+        mv.invokeStaticMethod(ofMethod(LaunchMode.class, "set", void.class, LaunchMode.class),
                 lm);
 
         mv.invokeStaticMethod(CONFIGURE_STEP_TIME_ENABLED);
@@ -192,6 +197,10 @@ public class MainClassBuildStep {
         // Init the LOG instance
         mv.writeStaticField(logField.getFieldDescriptor(), mv.invokeStaticMethod(
                 ofMethod(Logger.class, "getLogger", Logger.class, String.class), mv.load("io.quarkus.application")));
+
+        // Init the __QUARKUS_ANALYTICS_QUARKUS_VERSION field
+        mv.writeStaticField(quarkusVersionField.getFieldDescriptor(),
+                mv.load("__quarkus_analytics__quarkus.version=" + Version.getVersion()));
 
         ResultHandle startupContext = mv.newInstance(ofConstructor(StartupContext.class));
         mv.writeStaticField(scField.getFieldDescriptor(), startupContext);
@@ -214,27 +223,22 @@ public class MainClassBuildStep {
         mv = file.getMethodCreator("doStart", void.class, String[].class);
         mv.setModifiers(Modifier.PROTECTED | Modifier.FINAL);
 
-        // if AppCDS generation was requested and no other code has requested handling of the process,
-        // we ensure that the application simply loads some classes from a file and terminates
-        if (appCDSRequested.isPresent() && appCDSControlPoint.isEmpty()) {
-            ResultHandle createAppCDsSysProp = mv.invokeStaticMethod(
-                    ofMethod(System.class, "getProperty", String.class, String.class, String.class),
-                    mv.load(GENERATE_APP_CDS_SYSTEM_PROPERTY), mv.load("false"));
-            ResultHandle createAppCDSBool = mv.invokeStaticMethod(
-                    ofMethod(Boolean.class, "parseBoolean", boolean.class, String.class), createAppCDsSysProp);
-            BytecodeCreator createAppCDS = mv.ifTrue(createAppCDSBool).trueBranch();
-
-            createAppCDS.invokeStaticMethod(ofMethod(AppCDSUtil.class, "loadGeneratedClasses", void.class));
-
-            createAppCDS.invokeStaticMethod(ofMethod(ApplicationLifecycleManager.class, "exit", void.class));
-            createAppCDS.returnValue(null);
-        }
-
-        // very first thing is to set system props (for run time, which use substitutions for a different
-        // storage from build-time)
-        for (SystemPropertyBuildItem i : properties) {
+        // Make sure we set properties in doStartup as well. This is necessary because setting them in the static-init
+        // sets them at build-time, on the host JVM, while SVM has substitutions for System. get/setProperty at
+        // run-time which will never see those properties unless we also set them at run-time.
+        // make sure we record the system properties in order for build reproducibility
+        for (SystemPropertyBuildItem i : properties.stream().sorted(Comparator.comparing(SystemPropertyBuildItem::getKey))
+                .toList()) {
             mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
                     mv.load(i.getKey()), mv.load(i.getValue()));
+        }
+        // make sure we record the system properties in order for build reproducibility
+        for (GeneratedRuntimeSystemPropertyBuildItem i : generatedRuntimeSystemProperties.stream()
+                .sorted(Comparator.comparing(GeneratedRuntimeSystemPropertyBuildItem::getKey)).toList()) {
+            mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
+                    mv.load(i.getKey()),
+                    mv.invokeVirtualMethod(MethodDescriptor.ofMethod(i.getGeneratorClass(), "get", String.class.getName()),
+                            mv.newInstance(MethodDescriptor.ofConstructor(i.getGeneratorClass()))));
         }
         mv.invokeStaticMethod(ofMethod(NativeImageRuntimePropertiesRecorder.class, "doRuntime", void.class));
         mv.invokeStaticMethod(RUNTIME_EXECUTION_RUNTIME_INIT);
@@ -376,12 +380,12 @@ public class MainClassBuildStep {
         }
 
         MethodInfo mainClassMethod = null;
-        if (packageConfig.mainClass.isPresent()) {
-            String mainAnnotationClass = quarkusMainAnnotations.get(packageConfig.mainClass.get());
+        if (packageConfig.mainClass().isPresent()) {
+            String mainAnnotationClass = quarkusMainAnnotations.get(packageConfig.mainClass().get());
             if (mainAnnotationClass != null) {
                 mainClassName = mainAnnotationClass;
             } else {
-                mainClassName = packageConfig.mainClass.get();
+                mainClassName = packageConfig.mainClass().get();
             }
         } else if (quarkusMainAnnotations.containsKey("")) {
             mainClassName = quarkusMainAnnotations.get("");
@@ -513,7 +517,7 @@ public class MainClassBuildStep {
      */
     @BuildStep
     ReflectiveClassBuildItem applicationReflection() {
-        return ReflectiveClassBuildItem.builder(Application.APP_CLASS_NAME).build();
+        return ReflectiveClassBuildItem.builder(Application.APP_CLASS_NAME).reason("The generated application class").build();
     }
 
     /**
@@ -704,4 +708,10 @@ public class MainClassBuildStep {
         }
     }
 
+    @BuildStep
+    ReflectiveFieldBuildItem setupVersionField() {
+        return new ReflectiveFieldBuildItem(
+                "Ensure it's included in the executable to be able to grep the quarkus version",
+                Application.APP_CLASS_NAME, QUARKUS_ANALYTICS_QUARKUS_VERSION);
+    }
 }

@@ -32,9 +32,11 @@ import io.quarkus.kubernetes.spi.ConfiguratorBuildItem;
 import io.quarkus.kubernetes.spi.CustomProjectRootBuildItem;
 import io.quarkus.kubernetes.spi.DecoratorBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesAnnotationBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesClusterRoleBindingBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesClusterRoleBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesCommandBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesDeploymentTargetBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesEffectiveServiceAccountBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesEnvBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesHealthLivenessPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesHealthReadinessPathBuildItem;
@@ -42,6 +44,7 @@ import io.quarkus.kubernetes.spi.KubernetesHealthStartupPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesInitContainerBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesJobBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesLabelBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesNamespaceBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesPortBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesProbePortNameBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesResourceMetadataBuildItem;
@@ -59,7 +62,7 @@ public class MinikubeProcessor {
             BuildProducer<KubernetesResourceMetadataBuildItem> resourceMeta) {
         deploymentTargets.produce(
                 new KubernetesDeploymentTargetBuildItem(MINIKUBE, DEPLOYMENT, DEPLOYMENT_GROUP, DEPLOYMENT_VERSION,
-                        MINIKUBE_PRIORITY, true, config.getDeployStrategy()));
+                        MINIKUBE_PRIORITY, true, config.deployStrategy()));
 
         String name = ResourceNameUtil.getResourceName(config, applicationInfo);
         resourceMeta.produce(
@@ -68,15 +71,13 @@ public class MinikubeProcessor {
 
     @BuildStep
     public void createAnnotations(KubernetesConfig config, BuildProducer<KubernetesAnnotationBuildItem> annotations) {
-        config.getAnnotations().forEach((k, v) -> {
-            annotations.produce(new KubernetesAnnotationBuildItem(k, v, MINIKUBE));
-        });
+        config.annotations().forEach((k, v) -> annotations.produce(new KubernetesAnnotationBuildItem(k, v, MINIKUBE)));
     }
 
     @BuildStep
     public void createLabels(KubernetesConfig config, BuildProducer<KubernetesLabelBuildItem> labels,
             BuildProducer<ContainerImageLabelBuildItem> imageLabels) {
-        config.getLabels().forEach((k, v) -> {
+        config.labels().forEach((k, v) -> {
             labels.produce(new KubernetesLabelBuildItem(k, v, MINIKUBE));
             imageLabels.produce(new ContainerImageLabelBuildItem(k, v));
         });
@@ -86,12 +87,22 @@ public class MinikubeProcessor {
     public List<ConfiguratorBuildItem> createConfigurators(KubernetesConfig config,
             List<KubernetesPortBuildItem> ports) {
         List<ConfiguratorBuildItem> result = new ArrayList<>();
-        KubernetesCommonHelper.combinePorts(ports, config).values().forEach(value -> {
-            result.add(new ConfiguratorBuildItem(new AddPortToKubernetesConfig(value)));
-        });
+        KubernetesCommonHelper.combinePorts(ports, config).values()
+                .forEach(value -> result.add(new ConfiguratorBuildItem(new AddPortToKubernetesConfig(value))));
         return result;
     }
 
+    @BuildStep
+    public KubernetesEffectiveServiceAccountBuildItem computeEffectiveServiceAccounts(ApplicationInfoBuildItem applicationInfo,
+            KubernetesConfig config, List<KubernetesServiceAccountBuildItem> serviceAccountsFromExtensions,
+            BuildProducer<DecoratorBuildItem> decorators) {
+        final String name = ResourceNameUtil.getResourceName(config, applicationInfo);
+        return KubernetesCommonHelper.computeEffectiveServiceAccount(name, MINIKUBE,
+                config, serviceAccountsFromExtensions,
+                decorators);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     @BuildStep
     public List<DecoratorBuildItem> createDecorators(ApplicationInfoBuildItem applicationInfo,
             OutputTargetBuildItem outputTarget,
@@ -99,6 +110,7 @@ public class MinikubeProcessor {
             PackageConfig packageConfig,
             Optional<MetricsCapabilityBuildItem> metricsConfiguration,
             Optional<KubernetesClientCapabilityBuildItem> kubernetesClientConfiguration,
+            List<KubernetesNamespaceBuildItem> namespaces,
             List<KubernetesInitContainerBuildItem> initContainers,
             List<KubernetesJobBuildItem> jobs,
             List<KubernetesAnnotationBuildItem> annotations,
@@ -114,15 +126,17 @@ public class MinikubeProcessor {
             Optional<KubernetesHealthStartupPathBuildItem> startupPath,
             List<KubernetesRoleBuildItem> roles,
             List<KubernetesClusterRoleBuildItem> clusterRoles,
-            List<KubernetesServiceAccountBuildItem> serviceAccounts,
+            List<KubernetesEffectiveServiceAccountBuildItem> serviceAccounts,
             List<KubernetesRoleBindingBuildItem> roleBindings,
+            List<KubernetesClusterRoleBindingBuildItem> clusterRoleBindings,
             Optional<CustomProjectRootBuildItem> customProjectRoot) {
 
-        return DevClusterHelper.createDecorators(MINIKUBE, applicationInfo, outputTarget, config, packageConfig,
-                metricsConfiguration, kubernetesClientConfiguration, initContainers, jobs, annotations, labels, envs,
+        return DevClusterHelper.createDecorators(MINIKUBE, KUBERNETES, applicationInfo, outputTarget, config, packageConfig,
+                metricsConfiguration, kubernetesClientConfiguration, namespaces, initContainers, jobs, annotations, labels,
+                envs,
                 baseImage, image, command, ports, portName,
                 livenessPath, readinessPath, startupPath,
-                roles, clusterRoles, serviceAccounts, roleBindings, customProjectRoot);
+                roles, clusterRoles, serviceAccounts, roleBindings, clusterRoleBindings, customProjectRoot);
     }
 
     @BuildStep
@@ -140,8 +154,8 @@ public class MinikubeProcessor {
 
             BuildProducer<DecoratorBuildItem> decorators) {
         final String name = ResourceNameUtil.getResourceName(config, applicationInfo);
-        if (config.isExternalizeInit()) {
-            InitTaskProcessor.process(MINIKUBE, name, image, initTasks, config.getInitTaskDefaults(), config.getInitTasks(),
+        if (config.externalizeInit()) {
+            InitTaskProcessor.process(MINIKUBE, name, image, initTasks, config.initTaskDefaults(), config.initTasks(),
                     jobs, initContainers, env, roles, roleBindings, serviceAccount, decorators);
         }
     }

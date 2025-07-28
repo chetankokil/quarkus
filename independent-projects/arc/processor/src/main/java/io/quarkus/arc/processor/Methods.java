@@ -116,7 +116,7 @@ final class Methods {
         if (Modifier.isFinal(method.flags())) {
             String className = method.declaringClass().name().toString();
             if (!className.startsWith("java.")) {
-                if (transformUnproxyableClasses && (methodsFromWhichToRemoveFinal != null)) {
+                if (transformUnproxyableClasses && methodsFromWhichToRemoveFinal != null) {
                     methodsFromWhichToRemoveFinal.computeIfAbsent(className, (k) -> new HashSet<>())
                             .add(new MethodKey(method));
                     return false;
@@ -161,22 +161,20 @@ final class Methods {
         return method.declaringClass().name().equals(DotNames.OBJECT) && method.name().equals(TO_STRING);
     }
 
-    static Set<MethodInfo> addInterceptedMethodCandidates(BeanInfo bean,
-            Map<MethodKey, Set<AnnotationInstance>> candidates,
+    static Set<MethodInfo> addInterceptedMethodCandidates(BeanDeployment beanDeployment, ClassInfo targetClass,
+            BindingsDiscovery bindingsDiscovery, Map<MethodKey, Set<AnnotationInstance>> candidates,
             List<AnnotationInstance> classLevelBindings, Consumer<BytecodeTransformer> bytecodeTransformerConsumer,
-            boolean transformUnproxyableClasses) {
-        BeanDeployment beanDeployment = bean.getDeployment();
-        ClassInfo classInfo = bean.getTarget().get().asClass();
-        return addInterceptedMethodCandidates(beanDeployment, classInfo, classInfo, candidates, Set.copyOf(classLevelBindings),
-                bytecodeTransformerConsumer, transformUnproxyableClasses,
+            boolean transformUnproxyableClasses, boolean hasAroundInvokes) {
+        return addInterceptedMethodCandidates(beanDeployment, targetClass, targetClass, bindingsDiscovery, candidates,
+                Set.copyOf(classLevelBindings), bytecodeTransformerConsumer, transformUnproxyableClasses,
                 new SubclassSkipPredicate(beanDeployment.getAssignabilityCheck()::isAssignableFrom,
                         beanDeployment.getBeanArchiveIndex(), beanDeployment.getObserverAndProducerMethods(),
                         beanDeployment.getAnnotationStore()),
-                false, new HashSet<>(), bean.hasAroundInvokes());
+                false, new HashSet<>(), hasAroundInvokes);
     }
 
     private static Set<MethodInfo> addInterceptedMethodCandidates(BeanDeployment beanDeployment, ClassInfo classInfo,
-            ClassInfo originalClassInfo,
+            ClassInfo originalClassInfo, BindingsDiscovery bindingsDiscovery,
             Map<MethodKey, Set<AnnotationInstance>> candidates,
             Set<AnnotationInstance> classLevelBindings, Consumer<BytecodeTransformer> bytecodeTransformerConsumer,
             boolean transformUnproxyableClasses, SubclassSkipPredicate skipPredicate, boolean ignoreMethodLevelBindings,
@@ -194,13 +192,17 @@ final class Methods {
 
             // Note that we must merge the bindings first
             Set<AnnotationInstance> bindings = mergeBindings(beanDeployment, originalClassInfo, classLevelBindings,
-                    ignoreMethodLevelBindings, method, noClassInterceptorsMethods);
+                    ignoreMethodLevelBindings, method, noClassInterceptorsMethods, bindingsDiscovery);
             boolean possiblyIntercepted = !bindings.isEmpty() || targetHasAroundInvokes;
+            if (!possiblyIntercepted) {
+                candidates.put(key, bindings);
+                continue;
+            }
             if (skipPredicate.test(method)) {
                 continue;
             }
             boolean addToCandidates = true;
-            if (Modifier.isFinal(method.flags()) && possiblyIntercepted) {
+            if (Modifier.isFinal(method.flags())) {
                 if (transformUnproxyableClasses && !isNoninterceptableKotlinMethod(method)) {
                     methodsFromWhichToRemoveFinal.add(new MethodKey(method));
                 } else {
@@ -209,7 +211,7 @@ final class Methods {
                 }
             }
             if (addToCandidates) {
-                candidates.putIfAbsent(key, bindings);
+                candidates.put(key, bindings);
             }
         }
         skipPredicate.methodsProcessed();
@@ -224,9 +226,9 @@ final class Methods {
             ClassInfo superClassInfo = getClassByName(beanDeployment.getBeanArchiveIndex(), classInfo.superName());
             if (superClassInfo != null) {
                 finalMethodsFoundAndNotChanged
-                        .addAll(addInterceptedMethodCandidates(beanDeployment, superClassInfo, classInfo, candidates,
-                                classLevelBindings, bytecodeTransformerConsumer, transformUnproxyableClasses, skipPredicate,
-                                ignoreMethodLevelBindings, noClassInterceptorsMethods, targetHasAroundInvokes));
+                        .addAll(addInterceptedMethodCandidates(beanDeployment, superClassInfo, classInfo, bindingsDiscovery,
+                                candidates, classLevelBindings, bytecodeTransformerConsumer, transformUnproxyableClasses,
+                                skipPredicate, ignoreMethodLevelBindings, noClassInterceptorsMethods, targetHasAroundInvokes));
             }
         }
 
@@ -234,8 +236,8 @@ final class Methods {
             ClassInfo interfaceInfo = getClassByName(beanDeployment.getBeanArchiveIndex(), i);
             if (interfaceInfo != null) {
                 //interfaces can't have final methods
-                addInterceptedMethodCandidates(beanDeployment, interfaceInfo, originalClassInfo, candidates,
-                        classLevelBindings, bytecodeTransformerConsumer, transformUnproxyableClasses,
+                addInterceptedMethodCandidates(beanDeployment, interfaceInfo, originalClassInfo, bindingsDiscovery,
+                        candidates, classLevelBindings, bytecodeTransformerConsumer, transformUnproxyableClasses,
                         skipPredicate, true, noClassInterceptorsMethods, targetHasAroundInvokes);
             }
         }
@@ -244,10 +246,10 @@ final class Methods {
 
     private static Set<AnnotationInstance> mergeBindings(BeanDeployment beanDeployment, ClassInfo classInfo,
             Set<AnnotationInstance> classLevelBindings, boolean ignoreMethodLevelBindings, MethodInfo method,
-            Set<MethodKey> noClassInterceptorsMethods) {
+            Set<MethodKey> noClassInterceptorsMethods, BindingsDiscovery bindingsDiscovery) {
 
         MethodKey key = new MethodKey(method);
-        if (beanDeployment.getAnnotation(method, DotNames.NO_CLASS_INTERCEPTORS) != null
+        if (bindingsDiscovery.hasAnnotation(method, DotNames.NO_CLASS_INTERCEPTORS)
                 || noClassInterceptorsMethods.contains(key)) {
             // The set of methods with `@NoClassInterceptors` is shared in the traversal of class hierarchy, so once
             // a method with the annotation is found, all subsequent occurences of the "same" method are treated
@@ -270,7 +272,7 @@ final class Methods {
             return classLevelBindings;
         }
 
-        Collection<AnnotationInstance> methodAnnotations = beanDeployment.getAnnotations(method);
+        Collection<AnnotationInstance> methodAnnotations = bindingsDiscovery.getAnnotations(method);
         if (methodAnnotations.isEmpty()) {
             // No annotations declared on the method
             return classLevelBindings;
@@ -335,15 +337,27 @@ final class Methods {
         final List<DotName> params;
         final DotName returnType;
         final MethodInfo method; // this is intentionally ignored for equals/hashCode
+        private final int hashCode;
 
         public MethodKey(MethodInfo method) {
             this.method = Objects.requireNonNull(method, "Method must not be null");
             this.name = method.name();
             this.returnType = method.returnType().name();
-            this.params = new ArrayList<>();
-            for (Type i : method.parameterTypes()) {
-                params.add(i.name());
-            }
+            this.params = switch (method.parametersCount()) {
+                case 0 -> List.of();
+                case 1 -> List.of(method.parameterTypes().get(0).name());
+                case 2 -> List.of(method.parameterTypes().get(0).name(), method.parameterTypes().get(1).name());
+                default -> {
+                    List<DotName> ret = new ArrayList<>(method.parametersCount());
+                    for (Type parameterType : method.parameterTypes()) {
+                        ret.add(parameterType.name());
+                    }
+                    yield ret;
+                }
+            };
+
+            // the Map can be resized several times so it's worth caching the hashCode
+            this.hashCode = buildHashCode(this.name, this.params, this.returnType);
         }
 
         @Override
@@ -360,7 +374,14 @@ final class Methods {
 
         @Override
         public int hashCode() {
-            return Objects.hash(name, params, returnType);
+            return hashCode;
+        }
+
+        private static int buildHashCode(String name, List<DotName> params, DotName returnType) {
+            int result = Objects.hashCode(name);
+            result = 31 * result + Objects.hashCode(params);
+            result = 31 * result + Objects.hashCode(returnType);
+            return result;
         }
     }
 

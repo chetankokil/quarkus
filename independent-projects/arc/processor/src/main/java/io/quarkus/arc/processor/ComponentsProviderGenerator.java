@@ -28,6 +28,7 @@ import org.objectweb.asm.Type;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.Components;
 import io.quarkus.arc.ComponentsProvider;
+import io.quarkus.arc.CurrentContextFactory;
 import io.quarkus.arc.InjectableBean;
 import io.quarkus.arc.processor.ResourceOutput.Resource;
 import io.quarkus.gizmo.AssignableResultHandle;
@@ -41,6 +42,7 @@ import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
+import io.smallrye.common.annotation.SuppressForbidden;
 
 /**
  *
@@ -82,7 +84,8 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
         ClassCreator componentsProvider = ClassCreator.builder().classOutput(classOutput).className(generatedName)
                 .interfaces(ComponentsProvider.class).build();
 
-        MethodCreator getComponents = componentsProvider.getMethodCreator("getComponents", Components.class)
+        MethodCreator getComponents = componentsProvider
+                .getMethodCreator("getComponents", Components.class, CurrentContextFactory.class)
                 .setModifiers(ACC_PUBLIC);
 
         Map<BeanInfo, List<BeanInfo>> dependencyMap = initBeanDependencyMap(beanDeployment);
@@ -100,9 +103,13 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
 
         // Custom contexts
         ResultHandle contextsHandle = getComponents.newInstance(MethodDescriptor.ofConstructor(ArrayList.class));
-        for (Entry<ScopeInfo, Function<MethodCreator, ResultHandle>> entry : beanDeployment.getCustomContexts().entrySet()) {
-            ResultHandle contextHandle = entry.getValue().apply(getComponents);
-            getComponents.invokeInterfaceMethod(MethodDescriptors.LIST_ADD, contextsHandle, contextHandle);
+        for (Entry<ScopeInfo, List<Function<MethodCreator, ResultHandle>>> e : beanDeployment
+                .getCustomContexts()
+                .entrySet()) {
+            for (Function<MethodCreator, ResultHandle> func : e.getValue()) {
+                ResultHandle contextHandle = func.apply(getComponents);
+                getComponents.invokeInterfaceMethod(MethodDescriptors.LIST_ADD, contextsHandle, contextHandle);
+            }
         }
 
         // All interceptor bindings
@@ -545,6 +552,7 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         void addComponentInternal(BeanInfo removedBean) {
 
             ResultHandle removedBeansHandle = addMethod.getMethodParam(0);
@@ -648,11 +656,13 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         public ResultHandle get(org.jboss.jandex.Type type, BytecodeCreator bytecode) {
             return bytecode.invokeInterfaceMethod(MethodDescriptors.MAP_GET, mapHandle, bytecode.load(type.toString()));
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         public void put(org.jboss.jandex.Type type, ResultHandle value, BytecodeCreator bytecode) {
             bytecode.invokeInterfaceMethod(MethodDescriptors.MAP_PUT, mapHandle, bytecode.load(type.toString()), value);
         }

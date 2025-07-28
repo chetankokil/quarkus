@@ -7,6 +7,8 @@ import io.quarkus.runtime.annotations.ConfigRoot;
 import io.smallrye.config.ConfigMapping;
 
 /**
+ * Builder.
+ * <p>
  * This configuration class is here to avoid warnings when using {@code -Dquarkus.builder.=...}.
  *
  * @see io.quarkus.builder.BuildChainBuilder
@@ -24,5 +26,4 @@ public interface BuilderConfig {
      * Whether to log the cause of a conflict.
      */
     Optional<Boolean> logConflictCause();
-
 }

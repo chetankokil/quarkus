@@ -36,6 +36,9 @@
         <module>quartz-virtual-threads</module>
         <module>virtual-threads-disabled</module>
         <module>reactive-routes-virtual-threads</module>
+        <module>security-webauthn-virtual-threads</module>
+        <module>metrics-virtual-threads</module>
+        <module>graphql-virtual-threads</module>
     </modules>
 
     <build>
@@ -50,6 +53,7 @@
                 <executions>
                     <execution>
                         <id>enforce</id>
+                        <phase>${maven-enforcer-plugin.phase}</phase>
                         <goals>
                             <goal>enforce</goal>
                         </goals>
@@ -74,13 +78,6 @@
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.sonatype.plugins</groupId>
-                <artifactId>nexus-staging-maven-plugin</artifactId>
-                <configuration>
-                    <skipNexusStagingDeployMojo>true</skipNexusStagingDeployMojo>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>net.revelc.code</groupId>
@@ -135,9 +132,7 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${version.compiler.plugin}</version>
                     <configuration>
-                        <compilerArgs>
-                            <arg>-parameters</arg>
-                        </compilerArgs>
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -237,7 +232,7 @@
                 </file>
             </activation>
             <properties>
-                <quarkus.package.type>native</quarkus.package.type>
+                <quarkus.native.enabled>true</quarkus.native.enabled>
             </properties>
             <build>
                 <pluginManagement>

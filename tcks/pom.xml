@@ -26,6 +26,7 @@
                 <executions>
                     <execution>
                         <id>enforce</id>
+                        <phase>${maven-enforcer-plugin.phase}</phase>
                         <goals>
                             <goal>enforce</goal>
                         </goals>
@@ -51,13 +52,6 @@
                     </execution>
                 </executions>
             </plugin>
-            <plugin>
-                <groupId>org.sonatype.plugins</groupId>
-                <artifactId>nexus-staging-maven-plugin</artifactId>
-                <configuration>
-                    <skipNexusStagingDeployMojo>true</skipNexusStagingDeployMojo>
-                </configuration>
-            </plugin>
         </plugins>
     </build>
 
@@ -82,12 +76,12 @@
                 <artifactId>testng</artifactId>
                 <version>${testng.version}</version>
             </dependency>
-            <!-- Enforce jQuery version that is compatible with TestNG 7.4.0 -->
+            <!-- Enforce jQuery version that is compatible with TestNG 7.8.0 -->
             <dependency>
                 <groupId>org.webjars</groupId>
                 <artifactId>jquery</artifactId>
                 <!-- /!\ this version should not be upgraded, TestNG requires this particular version -->
-                <version>3.5.1</version>
+                <version>3.6.1</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

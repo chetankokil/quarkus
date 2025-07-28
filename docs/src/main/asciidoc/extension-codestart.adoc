@@ -13,7 +13,7 @@ This guide explains how to create and configure a Quarkus Codestart for an exten
 
 == Description
 
-"Extension Codestarts" is the name we give to our Quarkus extension quickstart code generation system. It aims to provide a personalized getting started experience with Quarkus.
+"Extension Codestarts" is the name we give to our Quarkus extension "getting started" code generation system. It aims to provide a personalized getting started experience with Quarkus.
 A Quarkus extension is able to provide one or more well-defined codestarts which will contain the resources and code required/recommended to start using that particular extension.
 
 Extension codestarts are applied by default when using the Quarkus tooling (if the chosen extensions contain any):
@@ -62,7 +62,7 @@ Each codestart consists of:
 
 - In the Quarkus core repository, the extension codestarts are all in the same https://github.com/quarkusio/quarkus/tree/main/devtools/project-core-extension-codestarts/src/main/resources/codestarts/quarkus/extension-codestarts[module, window="_blank"].
 
-- RESTEasy Reactive, RESTEasy and Spring Web extension codestarts are part of https://github.com/quarkusio/quarkus/tree/main/independent-projects/tools/base-codestarts/src/main/resources/codestarts/quarkus/extension-codestarts[the base codestarts, window="_blank"].
+- Quarkus REST (formerly RESTEasy Reactive), RESTEasy and Spring Web extension codestarts are part of https://github.com/quarkusio/quarkus/tree/main/independent-projects/tools/base-codestarts/src/main/resources/codestarts/quarkus/extension-codestarts[the base codestarts, window="_blank"].
 
 - For other extensions, the codestart will typically be located in the runtime module (with special instruction in the `pom.xml` to generate a separate codestart artifact).
 
@@ -194,7 +194,7 @@ tags: extension-codestart
 metadata:
   title: Aloha
   description: Start to code with the Aloha extension.
-  related-guide-section: https://quarkiverse.github.io/quarkiverse-docs/quarkus-aloha/dev/
+  related-guide-section: https://docs.quarkiverse.io/quarkus-aloha/dev/
   path: /aloha # (optional) for web extensions providing HTTP resources
 ----
 
@@ -316,7 +316,7 @@ public class AlohaCodestartTest {
 
 * The codestarts are all grouped in a https://github.com/quarkusio/quarkus/tree/main/devtools/project-core-extension-codestarts/src/main/resources/codestarts/quarkus/extension-codestarts[specific module, window="_blank"].
 * No extra Maven configuration is needed.
-* The https://github.com/quarkusio/quarkus/blob/main/extensions/resteasy-reactive/quarkus-resteasy-reactive-qute/runtime/src/main/resources/META-INF/quarkus-extension.yaml#L18[extension metadata, window="_blank"] references the artifact containing all the core codestarts.
+* The https://github.com/quarkusio/quarkus/blob/main/extensions/resteasy-reactive/rest-qute/runtime/src/main/resources/META-INF/quarkus-extension.yaml#L18[extension metadata, window="_blank"] references the artifact containing all the core codestarts.
 * The tests are also https://github.com/quarkusio/quarkus/tree/main/integration-tests/devtools/src/test/java/io/quarkus/devtools/codestarts/quarkus[grouped, window="_blank"]. You don't need to test the build as there is a specific grouped https://github.com/quarkusio/quarkus/blob/main/integration-tests/devtools/src/test/java/io/quarkus/devtools/codestarts/quarkus/QuarkusCodestartBuildIT.java[test, window="_blank"] for it. e.g.:
 +
 [source,java]
@@ -531,6 +531,53 @@ NOTE: In order to first generate or update existing snapshots files on your loca
 It is going to be merged with the other codestarts config and automatically converted to the selected config type (yaml or properties).
 * You can start with java and add kotlin later in another PR (create an issue so you don't forget).
 * If you have a question, ping me @ia3andy on https://quarkusio.zulipchat.com/.
+
+=== Platform codestarts data
+
+This chapter is relevant for https://quarkus.io/guides/platform[Quarkus platform] developers who want to provide codestart data in the https://quarkus.io/guides/platform#platform-descriptor[platform metadata].
+
+While typically codestart data is configured in <<codestart-yml>> files, platform developers may also provide codestart data in a platform descriptor with the purpose of customizing certain values.
+
+For example, given a `codestart.yml` such as
+[source,yaml]
+----
+name: quarkus-magic-codestart
+ref: quarkus-magic
+type: code
+tags: extension-codestart
+metadata:
+  title: Quarkus Magic
+  description: Quarkus magic
+language:
+  base:
+    data:
+      magic:
+        source: codestart.yml
+----
+
+The value of `magic.source` can be customized in a platform descriptor like this
+[source,yaml]
+----
+{
+  "id" : "org.acme.platform:acme-bom-quarkus-platform-descriptor:7.0.7:json:7.0.7",
+  "platform" : true,
+  "bom" : "org.acme.platform:acme-magic-bom::pom:7.0.7",
+  "metadata" : {
+    "project" : { <1>
+      "codestart-data" : { <2>
+        "quarkus-magic-codestart" : { <3>
+          "magic" : {
+            "source" : "acme-platform"
+          }
+        }
+      }
+    },
+...
+----
+
+<1> `project` groups metadata that is relevant for project creation tools
+<2> `codestart-data` is a source of data for various codestarts
+<3> a name of the codestart to which the data nested under it should be passed
 
 == The generator sources
 

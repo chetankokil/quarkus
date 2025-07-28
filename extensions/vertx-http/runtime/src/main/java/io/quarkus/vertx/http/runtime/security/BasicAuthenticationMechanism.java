@@ -21,16 +21,12 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
-
-import jakarta.inject.Inject;
-import jakarta.inject.Singleton;
 
 import org.jboss.logging.Logger;
 
@@ -42,8 +38,6 @@ import io.quarkus.security.identity.IdentityProviderManager;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.request.AuthenticationRequest;
 import io.quarkus.security.identity.request.UsernamePasswordAuthenticationRequest;
-import io.quarkus.vertx.http.runtime.HttpBuildTimeConfig;
-import io.quarkus.vertx.http.runtime.HttpConfiguration;
 import io.smallrye.mutiny.Uni;
 import io.vertx.ext.web.RoutingContext;
 
@@ -51,7 +45,6 @@ import io.vertx.ext.web.RoutingContext;
  * The authentication handler responsible for BASIC authentication as described by RFC2617
  *
  */
-@Singleton
 public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism {
 
     private static final Logger log = Logger.getLogger(BasicAuthenticationMechanism.class);
@@ -66,7 +59,7 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
 
     /**
      * If silent is true then this mechanism will only take effect if there is an Authorization header.
-     *
+     * <p>
      * This allows you to combine basic auth with form auth, so human users will use form based auth, but allows
      * programmatic clients to login using basic auth.
      */
@@ -75,11 +68,10 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
     private final Charset charset;
     private final Map<Pattern, Charset> userAgentCharsets;
 
-    @Inject
-    BasicAuthenticationMechanism(HttpConfiguration runtimeConfig, HttpBuildTimeConfig buildTimeConfig) {
-        this(runtimeConfig.auth.realm.orElse(null), buildTimeConfig.auth.form.enabled);
-    }
-
+    /**
+     * @deprecated use {@link BasicAuthenticationMechanism(String, boolean)}
+     */
+    @Deprecated(forRemoval = true, since = "3.25")
     public BasicAuthenticationMechanism(final String realmName) {
         this(realmName, false);
     }
@@ -93,7 +85,7 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
         this.challenge = realmName == null ? BASIC : BASIC_PREFIX + "realm=\"" + realmName + "\"";
         this.silent = silent;
         this.charset = charset;
-        this.userAgentCharsets = Collections.unmodifiableMap(new LinkedHashMap<>(userAgentCharsets));
+        this.userAgentCharsets = Map.copyOf(userAgentCharsets);
     }
 
     @Override

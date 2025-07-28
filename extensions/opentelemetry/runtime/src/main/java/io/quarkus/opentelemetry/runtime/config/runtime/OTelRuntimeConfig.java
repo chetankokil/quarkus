@@ -29,19 +29,40 @@ public interface OTelRuntimeConfig {
     TracesRuntimeConfig traces();
 
     /**
+     * Metric runtime config.
+     */
+    MetricsRuntimeConfig metric();
+
+    /**
+     * Logs runtime config.
+     */
+    LogsRuntimeConfig logs();
+
+    /**
      * environment variables for the types of attributes, for which that SDK implements truncation mechanism.
      */
     AttributeConfig attribute();
 
     /**
      * Span limit definitions.
+     * <p>
+     * Tracing specific.
      */
     SpanConfig span();
 
     /**
      * Batch Span Processor configurations.
+     * <p>
+     * Tracing specific.
      */
     BatchSpanProcessorConfig bsp();
+
+    /**
+     * Batch Log Record Processor configurations.
+     * <p>
+     * Logging specific.
+     */
+    BatchLogRecordProcessorConfig blrp();
 
     /**
      * Specify resource attributes in the following format: <code>key1=val1,key2=val2,key3=val3</code>.
@@ -69,7 +90,7 @@ public interface OTelRuntimeConfig {
      * The maximum amount of time Quarkus will wait for the OpenTelemetry SDK to flush unsent spans and shutdown.
      */
     @WithName("experimental.shutdown-wait-time")
-    @WithDefault("1s")
+    @WithDefault("2s")
     Duration experimentalShutdownWaitTime();
 
     /**
@@ -78,17 +99,12 @@ public interface OTelRuntimeConfig {
     InstrumentRuntimeConfig instrument();
 
     /**
-     * Opt-in to emit stable OpenTelemetry semantic conventions or a
-     * duplication of the old plus the new semantic convention attribute names.
+     * Prioritize OpenTelemetry configuration <code>otel.</code> on top of Quarkus OpenTelemetry configuration
+     * <code>quarkus.otel</code>.
      * <p>
-     * - <code>http</code> - emit the new, stable HTTP and networking attributes, and stop emitting the old
-     * experimental HTTP and networking attributes that the instrumentation emitted previously.
-     * <p>
-     * - <code>http/dup</code> - emit both the old and the stable HTTP and networking attributes, allowing
-     * for a more seamless transition.
-     * <p>
-     * The default, by not defining a property value, will mean the use of the old legacy semantic attribute names.
+     * By default, Quarkus configuration has priority over OpenTelemetry configuration.
      */
-    @WithName("otel.semconv-stability.opt-in")
-    Optional<String> otelSemconvStabilityOptIn();
+    @WithName("mp.compatibility")
+    @WithDefault("false")
+    boolean mpCompatibility();
 }

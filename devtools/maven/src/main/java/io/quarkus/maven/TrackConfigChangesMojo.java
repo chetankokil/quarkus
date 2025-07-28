@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
-import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
 import org.apache.maven.plugin.MojoExecutionException;
@@ -58,7 +57,7 @@ public class TrackConfigChangesMojo extends QuarkusBootstrapMojo {
     File recordedBuildConfigDirectory;
 
     @Parameter(property = "quarkus.recorded-build-config.file", required = false)
-    File recordedBuildConfigFile;
+    String recordedBuildConfigFile;
 
     /**
      * Whether to dump the current build configuration in case the configuration from the previous build isn't found
@@ -102,16 +101,7 @@ public class TrackConfigChangesMojo extends QuarkusBootstrapMojo {
             getLog().debug("Bootstrapping Quarkus application in mode " + launchMode);
         }
 
-        Path compareFile;
-        if (this.recordedBuildConfigFile == null) {
-            compareFile = recordedBuildConfigDirectory.toPath()
-                    .resolve("quarkus-" + launchMode.getDefaultProfile() + "-config-dump");
-        } else if (this.recordedBuildConfigFile.isAbsolute()) {
-            compareFile = this.recordedBuildConfigFile.toPath();
-        } else {
-            compareFile = recordedBuildConfigDirectory.toPath().resolve(this.recordedBuildConfigFile.toPath());
-        }
-
+        final Path compareFile = resolvePreviousBuildConfigDump(launchMode);
         final boolean prevConfigExists = Files.exists(compareFile);
         if (!prevConfigExists && !dumpCurrentWhenRecordedUnavailable && !dumpDependencies) {
             getLog().info("Config dump from the previous build does not exist at " + compareFile);
@@ -121,7 +111,7 @@ public class TrackConfigChangesMojo extends QuarkusBootstrapMojo {
         CuratedApplication curatedApplication = null;
         QuarkusClassLoader deploymentClassLoader = null;
         final ClassLoader originalCl = Thread.currentThread().getContextClassLoader();
-        final boolean clearPackageTypeSystemProperty = setPackageTypeSystemPropertyIfNativeProfileEnabled();
+        final boolean clearNativeEnabledSystemProperty = setNativeEnabledIfNativeProfileEnabled();
         try {
             curatedApplication = bootstrapApplication(launchMode);
             if (prevConfigExists || dumpCurrentWhenRecordedUnavailable) {
@@ -148,24 +138,19 @@ public class TrackConfigChangesMojo extends QuarkusBootstrapMojo {
             }
 
             if (dumpDependencies) {
-                final List<String> deps = new ArrayList<>();
+                final List<Path> deps = new ArrayList<>();
                 for (var d : curatedApplication.getApplicationModel().getDependencies(DependencyFlags.DEPLOYMENT_CP)) {
-                    StringBuilder entry = new StringBuilder(d.toGACTVString());
-                    if (d.isSnapshot()) {
-                        var adler32 = new Adler32();
-                        updateChecksum(adler32, d.getResolvedPaths());
-                        entry.append(" ").append(adler32.getValue());
+                    for (Path resolvedPath : d.getResolvedPaths()) {
+                        deps.add(resolvedPath.toAbsolutePath());
                     }
-
-                    deps.add(entry.toString());
                 }
                 Collections.sort(deps);
                 final Path targetFile = getOutputFile(dependenciesFile, launchMode.getDefaultProfile(),
-                        "-dependency-checksums.txt");
+                        "-dependencies.txt");
                 Files.createDirectories(targetFile.getParent());
                 try (BufferedWriter writer = Files.newBufferedWriter(targetFile)) {
-                    for (var s : deps) {
-                        writer.write(s);
+                    for (var dep : deps) {
+                        writer.write(dep.toString());
                         writer.newLine();
                     }
                 }
@@ -173,14 +158,27 @@ public class TrackConfigChangesMojo extends QuarkusBootstrapMojo {
         } catch (Exception any) {
             throw new MojoExecutionException("Failed to bootstrap Quarkus application", any);
         } finally {
-            if (clearPackageTypeSystemProperty) {
-                System.clearProperty(PACKAGE_TYPE_PROP);
+            if (clearNativeEnabledSystemProperty) {
+                System.clearProperty("quarkus.native.enabled");
             }
             Thread.currentThread().setContextClassLoader(originalCl);
             if (deploymentClassLoader != null) {
                 deploymentClassLoader.close();
             }
         }
+    }
+
+    private Path resolvePreviousBuildConfigDump(LaunchMode launchMode) {
+        final Path previousBuildConfigDump = this.recordedBuildConfigFile == null ? null
+                : Path.of(this.recordedBuildConfigFile);
+        if (previousBuildConfigDump == null) {
+            return recordedBuildConfigDirectory.toPath()
+                    .resolve("quarkus-" + launchMode.getDefaultProfile() + "-config-dump");
+        }
+        if (previousBuildConfigDump.isAbsolute()) {
+            return previousBuildConfigDump;
+        }
+        return recordedBuildConfigDirectory.toPath().resolve(previousBuildConfigDump);
     }
 
     private Path getOutputFile(File outputFile, String profile, String fileNameSuffix) {

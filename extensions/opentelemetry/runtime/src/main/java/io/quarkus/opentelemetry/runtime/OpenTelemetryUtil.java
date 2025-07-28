@@ -5,14 +5,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
 
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.trace.ReadableSpan;
-import io.quarkus.opentelemetry.runtime.config.runtime.SemconvStabilityType;
 import io.quarkus.vertx.core.runtime.VertxMDC;
 
 public final class OpenTelemetryUtil {
@@ -20,7 +17,6 @@ public final class OpenTelemetryUtil {
     public static final String SPAN_ID = "spanId";
     public static final String SAMPLED = "sampled";
     public static final String PARENT_ID = "parentId";
-    private static final Set<String> SPAN_DATA_KEYS = Set.of(TRACE_ID, SPAN_ID, SAMPLED, PARENT_ID);
 
     private OpenTelemetryUtil() {
     }
@@ -54,22 +50,28 @@ public final class OpenTelemetryUtil {
 
     /**
      * Sets MDC data by using the current span from the context.
+     * <p>
+     * This method is in the hot path and was optimized to not use getSpanData()
      *
      * @param context opentelemetry context
      * @param vertxContext vertx context
      */
     public static void setMDCData(Context context, io.vertx.core.Context vertxContext) {
-        setMDCData(getSpanData(context), vertxContext);
-    }
-
-    public static void setMDCData(Map<String, String> spanData, io.vertx.core.Context vertxContext) {
-        if (spanData == null) {
+        if (context == null) {
             return;
         }
 
-        for (Entry<String, String> entry : spanData.entrySet()) {
-            if (SPAN_DATA_KEYS.contains(entry.getKey())) {
-                VertxMDC.INSTANCE.put(entry.getKey(), entry.getValue(), vertxContext);
+        Span span = Span.fromContextOrNull(context);
+        if (span != null) {
+            SpanContext spanContext = span.getSpanContext();
+            VertxMDC.INSTANCE.put(SPAN_ID, spanContext.getSpanId(), vertxContext);
+            VertxMDC.INSTANCE.put(TRACE_ID, spanContext.getTraceId(), vertxContext);
+            VertxMDC.INSTANCE.put(SAMPLED, Boolean.toString(spanContext.isSampled()), vertxContext);
+            if (span instanceof ReadableSpan) {
+                SpanContext parentSpanContext = ((ReadableSpan) span).getParentSpanContext();
+                if (parentSpanContext != null && parentSpanContext.isValid()) {
+                    VertxMDC.INSTANCE.put(PARENT_ID, parentSpanContext.getSpanId(), vertxContext);
+                }
             }
         }
     }
@@ -84,7 +86,7 @@ public final class OpenTelemetryUtil {
             return Collections.emptyMap();
         }
         Span span = Span.fromContextOrNull(context);
-        Map<String, String> spanData = new HashMap<>();
+        Map<String, String> spanData = new HashMap<>(4, 1f);
         if (span != null) {
             SpanContext spanContext = span.getSpanContext();
             spanData.put(SPAN_ID, spanContext.getSpanId());
@@ -111,17 +113,5 @@ public final class OpenTelemetryUtil {
         vertxMDC.remove(SPAN_ID, vertxContext);
         vertxMDC.remove(PARENT_ID, vertxContext);
         vertxMDC.remove(SAMPLED, vertxContext);
-    }
-
-    public static SemconvStabilityType getSemconvStabilityOptin(String config) {
-        if (config == null || config.isBlank()) {
-            return SemconvStabilityType.HTTP_OLD;
-        }
-
-        try {
-            return SemconvStabilityType.fromValue(config);
-        } catch (IllegalArgumentException e) {
-            return SemconvStabilityType.HTTP_OLD;
-        }
     }
 }

@@ -4,7 +4,7 @@ and pull requests should be submitted there:
 https://github.com/quarkusio/quarkus/tree/main/docs/src/main/asciidoc
 ////
 = Redis Extension Reference Guide
-:extension-status: preview
+:extension-status: stable
 include::_attributes.adoc[]
 :numbered:
 :sectnums:
@@ -145,7 +145,7 @@ The Redis extension can operate in 4 distinct modes:
 * Simple client (probably what most users need).
 * Sentinel (when working with Redis in High Availability mode).
 * Cluster (when working with Redis in Clustered mode).
-* Replication (single shard, one node write, multiple read).
+* Replication (single shard, one node writes, multiple read).
 
 The connection url is configured with the `quarkus.redis.hosts` (or `quarkus.redis.<name>.hosts`) as follows:
 
@@ -183,6 +183,22 @@ The client will obtain the URLs of actual Redis servers (master or replicas, dep
 Note that you practically never want to configure `quarkus.redis.role=sentinel`.
 This setting means that the Redis client will execute commands directly on one of the sentinel servers, instead of an actual Redis server guarded by the sentinels.
 
+==== Automatic Failover
+
+In the sentinel mode, it is possible to configure automatic failover of _master_ connections:
+
+[source,properties]
+----
+quarkus.redis.auto-failover=true
+----
+
+If enabled, the sentinel client will additionally create a connection to one sentinel node and watch for failover events.
+When new master is elected, all connections to the old master are automatically closed and new connections to the new master are created.
+Automatic failover makes sense for connections executing regular commands, but not for connections used to subscribe to Redis pub/sub channels.
+
+Note that there is a brief period of time between the old master failing and the new master being elected when the existing connections will temporarily fail all operations.
+After the new master is elected, the connections will automatically fail over and start working again.
+
 === Use the Cluster Mode
 
 When using Redis in cluster mode, you need to pass multiple _host urls_, configure the client type to `cluster` and configure the `replicas` mode:
@@ -191,14 +207,26 @@ When using Redis in cluster mode, you need to pass multiple _host urls_, configu
 ----
 quarkus.redis.hosts=redis://localhost:7000,redis://localhost:7001,redis://localhost:7002
 quarkus.redis.client-type=cluster
-quarkus.redis.replicas=share
+
+# Optional
+quarkus.redis.replicas=share # defaults to "never"
 ----
 
 The host URLs here must be some of the cluster members.
 Not all cluster members need to be configured, as the client will obtain a full cluster topology from one of the known servers.
 However, it is advisable to configure at least 2 or 3 nodes, not just 1.
 
-=== Use the replication Mode
+By default, all commands are sent to a master node (if the command has a key, it is the master node of the shard that owns the key, otherwise it is a random master node).
+It is possible to configure the Redis client to send read-only commands (queries) to replica nodes.
+Set the `quarkus.redis.replicas` configuration property to:
+
+* `never`: never use replica nodes, always send queries to master nodes (this is the default)
+* `always`: always use replica nodes (if there's more than one replica in the shard, it is selected randomly), never send queries to master nodes
+* `share`: use master and replica nodes to execute queries (the specific node for each query is selected randomly)
+
+Note that replication in Redis is asynchronous, so replica nodes may be lagging behind their master nodes.
+
+=== Use the Replication Mode
 
 When using the replication mode, you need to pass a single host url and configure the type to be `replication`:
 
@@ -206,7 +234,44 @@ When using the replication mode, you need to pass a single host url and configur
 ----
 quarkus.redis.hosts=redis://localhost:7000
 quarkus.redis.client-type=replication
+
+# Optional
+quarkus.redis.replicas=share # defaults to "never"
 ----
+
+By default, all commands are sent to the master node.
+It is possible to configure the Redis client to send read-only commands (queries) to replica nodes.
+Set the `quarkus.redis.replicas` configuration property to:
+
+* `never`: never use replica nodes, always send queries to the master node (this is the default)
+* `always`: always use replica nodes (if there's more than one replica, it is selected randomly), never send queries to the master node
+* `share`: use master and replica nodes to execute queries (the specific node for each query is selected randomly)
+
+Note that replication in Redis is asynchronous, so replica nodes may be lagging behind the master node.
+
+==== Static Topology
+
+In the replication mode, it is possible to reconfigure the Redis client to skip automatic discovery of the topology:
+
+[source,properties]
+----
+quarkus.redis.topology=static
+----
+
+With static topology, the first node in the configuration is assumed to be a _master_ node, while the remaining nodes are assumed to be _replicas_.
+The nodes are not verified; it is a responsibility of the application developer to ensure that the static configuration is correct.
+
+Note that automatic discovery of the topology is usually the preferred choice.
+Static configuration should only be used when necessary.
+One such case is _Amazon Elasticache for Redis (Cluster Mode Disabled)_, where:
+
+* master node should be set to the _primary endpoint_, and
+* one replica node should be set to the _reader endpoint_.
+
+WARNING: Note that the reader endpoint of Elasticache for Redis (Cluster Mode Disabled) is a domain name which resolves to a CNAME record that points to one of the replicas.
+The CNAME record to which the reader endpoint resolves changes over time.
+This form of DNS-based load balancing does not work well with DNS resolution caching and connection pooling.
+As a result, some replicas are likely to be underutilized.
 
 === Connect to Redis Cloud
 
@@ -222,8 +287,22 @@ quarkus.redis.password=<the password>
 
 To use TLS, you need to:
 
-1. Set the `quarkus.redis.tls.enabled=true` property
+1. Set the `quarkus.redis.tls.enabled=true` property or use the  xref:./tls-registry-reference.adoc[TLS registry] (recommended)
 2. Make sure that your URL starts with `rediss://` (with two `s`)
+
+
+When using the TLS registry, you need to use a named configuration to avoid conflicts with other TLS configurations:
+
+[source,properties]
+----
+quarkus.tls.redis.trust-store.p12.path=client.p12
+quarkus.tls.redis.trust-store.p12.password=secret
+
+quarkus.redis.tls-configuration-name=redis # Reference the named configuration
+----
+
+IMPORTANT: The default hostname verifier is set to `NONE`, meaning it does not verify the host name. You can change this behavior by setting the `quarkus.redis.tls.hostname-verification-algorithm` property, to `HTTPS` for example.
+
 
 === Configure the authentication
 
@@ -985,4 +1064,4 @@ quarkus.micrometer.binder.redis.enabled=false
 [[redis-configuration-reference]]
 == Configuration reference
 
-include::{generated-dir}/config/quarkus-redis.adoc[opts=optional, leveloffset=+1]
+include::{generated-dir}/config/quarkus-redis-client.adoc[opts=optional, leveloffset=+1]

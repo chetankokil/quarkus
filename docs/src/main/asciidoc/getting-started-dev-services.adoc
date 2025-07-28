@@ -62,7 +62,7 @@ The solution is located in the `getting-started-dev-services` {quickstarts-tree-
 The easiest way to create a new Quarkus project is to open a terminal and run the following command:
 
 :create-app-artifact-id: getting-started-dev-services
-:create-app-extensions: resteasy-reactive
+:create-app-extensions: rest
 :create-app-code:
 include::{includes}/devtools/create-app.adoc[]
 
@@ -74,7 +74,7 @@ Launch the application in dev mode
 
 include::{includes}/devtools/dev.adoc[]
 
-Once the application is up, visit http://localhost:8080/hello. It should show a "Hello from RESTEasy Reactive" message.
+Once the application is up, visit http://localhost:8080/hello. It should show a "Hello from Quarkus REST" message.
 
 === Accepting user input
 
@@ -105,7 +105,7 @@ and replace
 
 [source, java]
 ----
-             .body(is("Hello from RESTEasy Reactive"));
+             .body(is("Hello from Quarkus REST"));
 ----
 
 with
@@ -125,7 +125,7 @@ You should see in your terminal that the tests are now passing.
 
 1. To add the persistence libraries, run
 
-:add-extension-extensions: hibernate-orm-panache jdbc-postgresql
+:add-extension-extensions: hibernate-orm-panache,jdbc-postgresql
 include::{includes}/devtools/extension-add.adoc[]
 
 The application will record the names of people it greets. Define an Entity
@@ -237,10 +237,10 @@ Quarkus will automatically stop the container when your application stops.
 
 If you play with your code some more, you may notice that sometimes, after making an application change, http://localhost:8080/hello/names doesn't list any names.
 What's going on? By default, in dev mode, with a Dev Services database,
- Quarkus configures Hibernate ORM database generation to be `drop-and-create`.
- See the xref:hibernate-orm.adoc#quarkus-hibernate-orm_quarkus-hibernate-orm-database-database-related-configuration[Hibernate configuration reference] for more details.
- If a code change triggers an application restart, the database tables
- will be dropped (deleted) and then re-created.
+Quarkus configures Hibernate ORM database schema management strategy to be `drop-and-create`.
+See the xref:hibernate-orm.adoc#quarkus-hibernate-orm_quarkus-hibernate-orm-schema-management-strategy[Hibernate configuration reference] for more details.
+If a code change triggers an application restart, the database tables
+will be dropped (deleted) and then re-created.
 
 This is convenient, but what if you'd prefer the database to always have content?
 That would make testing easier.
@@ -306,7 +306,7 @@ But what about production? You won't want to use Dev Services in production.
 In fact, Quarkus only starts Dev Services in dev and test modes.
 
 Wouldn't it be nice to configure an external database,
-but have it *only* used in production, so you could still use dev services the rest of the time?
+but have it *only* used in production, so you could still use Dev Services the rest of the time?
 
 Add a `%prod.`
 prefix to the database configuration. This means the configuration

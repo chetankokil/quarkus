@@ -29,7 +29,7 @@ public class GrpcCommonProcessor {
 
         // We also need to include enums.
         Collection<ClassInfo> enums = combinedIndex.getIndex()
-                .getAllKnownSubclasses(GrpcDotNames.PROTOCOL_MESSAGE_ENUM);
+                .getAllKnownImplementations(GrpcDotNames.PROTOCOL_MESSAGE_ENUM);
         for (ClassInfo en : enums) {
             reflectiveClass.produce(ReflectiveClassBuildItem.builder(en.name().toString()).methods()
                     .fields().build());
@@ -54,14 +54,14 @@ public class GrpcCommonProcessor {
         }
 
         // Built-In providers:
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder(DnsNameResolverProvider.class).methods()
+        reflectiveClass.produce(ReflectiveClassBuildItem
+                .builder(DnsNameResolverProvider.class, PickFirstLoadBalancerProvider.class, NettyChannelProvider.class)
+                .methods()
+                .reason(getClass().getName() + " built-in provider")
                 .build());
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder(PickFirstLoadBalancerProvider.class)
-                .methods().build());
         reflectiveClass.produce(ReflectiveClassBuildItem.builder("io.grpc.util.SecretRoundRobinLoadBalancerProvider$Provider")
+                .reason(getClass().getName() + " built-in provider")
                 .methods().build());
-        reflectiveClass.produce(ReflectiveClassBuildItem.builder(NettyChannelProvider.class).methods()
-                .build());
     }
 
     @BuildStep

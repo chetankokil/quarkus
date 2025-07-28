@@ -1,6 +1,5 @@
 package io.quarkus.vertx.runtime;
 
-import static io.quarkus.vertx.core.runtime.context.VertxContextSafetyToggle.setContextSafe;
 import static io.quarkus.vertx.core.runtime.context.VertxContextSafetyToggle.setCurrentContextSafe;
 import static io.smallrye.common.expression.Expression.Flag.LENIENT_SYNTAX;
 import static io.smallrye.common.expression.Expression.Flag.NO_TRIM;
@@ -9,7 +8,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -20,7 +18,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.microprofile.config.Config;
-import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
 import io.quarkus.arc.CurrentContextFactory;
@@ -28,15 +26,12 @@ import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
-import io.quarkus.runtime.configuration.ProfileManager;
 import io.quarkus.vertx.ConsumeEvent;
 import io.quarkus.vertx.LocalEventBusCodec;
 import io.quarkus.virtual.threads.VirtualThreadsRecorder;
 import io.smallrye.common.expression.Expression;
 import io.smallrye.common.expression.ResolveContext;
-import io.smallrye.common.vertx.VertxContext;
 import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
@@ -55,7 +50,8 @@ public class VertxEventBusConsumerRecorder {
     static volatile Vertx vertx;
     static volatile List<MessageConsumer<?>> messageConsumers;
 
-    public void configureVertx(Supplier<Vertx> vertx, Map<String, ConsumeEvent> messageConsumerConfigurations,
+    public void configureVertx(Supplier<Vertx> vertx,
+            List<EventConsumerInfo> messageConsumerConfigurations,
             LaunchMode launchMode, ShutdownContext shutdown, Map<Class<?>, Class<?>> codecByClass,
             List<Class<?>> selectorTypes) {
         VertxEventBusConsumerRecorder.vertx = vertx.get();
@@ -94,15 +90,19 @@ public class VertxEventBusConsumerRecorder {
         vertx = null;
     }
 
-    void registerMessageConsumers(Map<String, ConsumeEvent> messageConsumerConfigurations) {
+    void registerMessageConsumers(List<EventConsumerInfo> messageConsumerConfigurations) {
         if (!messageConsumerConfigurations.isEmpty()) {
             EventBus eventBus = vertx.eventBus();
             VertxInternal vi = (VertxInternal) VertxEventBusConsumerRecorder.vertx;
             CountDownLatch latch = new CountDownLatch(messageConsumerConfigurations.size());
             final List<Throwable> registrationFailures = new ArrayList<>();
-            for (Entry<String, ConsumeEvent> entry : messageConsumerConfigurations.entrySet()) {
-                EventConsumerInvoker invoker = createInvoker(entry.getKey());
-                String address = lookUpPropertyValue(entry.getValue().value());
+            for (EventConsumerInfo info : messageConsumerConfigurations) {
+                EventConsumerInvoker invoker = new EventConsumerInvoker(info.invoker.getValue(), info.splitHeadersBodyParams);
+                String address = lookUpPropertyValue(info.annotation.value());
+                boolean local = info.annotation.local();
+                boolean blocking = info.annotation.blocking() || info.blockingAnnotation || info.runOnVirtualThreadAnnotation;
+                boolean runOnVirtualThread = info.runOnVirtualThreadAnnotation;
+                boolean ordered = info.annotation.ordered();
                 // Create a context attached to each consumer
                 // If we don't all consumers will use the same event loop and so published messages (dispatched to all
                 // consumers) delivery is serialized.
@@ -111,7 +111,7 @@ public class VertxEventBusConsumerRecorder {
                     @Override
                     public void handle(Void x) {
                         MessageConsumer<Object> consumer;
-                        if (entry.getValue().local()) {
+                        if (local) {
                             consumer = eventBus.localConsumer(address);
                         } else {
                             consumer = eventBus.consumer(address);
@@ -120,35 +120,30 @@ public class VertxEventBusConsumerRecorder {
                         consumer.handler(new Handler<Message<Object>>() {
                             @Override
                             public void handle(Message<Object> m) {
-                                if (invoker.isBlocking()) {
-                                    // We need to create a duplicated context from the "context"
-                                    Context dup = VertxContext.getOrCreateDuplicatedContext(context);
-                                    setContextSafe(dup, true);
-
-                                    if (invoker.isRunningOnVirtualThread()) {
-                                        // Switch to a Vert.x context to capture it and use it during the invocation.
-                                        dup.runOnContext(new Handler<Void>() {
+                                // Will run on the context used for the consumer registration.
+                                // It's a duplicated context, but we need to mark it as safe.
+                                // The safety comes from the fact that it's instantiated by Vert.x for every
+                                // message.
+                                setCurrentContextSafe(true);
+                                if (blocking) {
+                                    if (runOnVirtualThread) {
+                                        VirtualThreadsRecorder.getCurrent().execute(new Runnable() {
                                             @Override
-                                            public void handle(Void event) {
-                                                VirtualThreadsRecorder.getCurrent().execute(new Runnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        try {
-                                                            invoker.invoke(m);
-                                                        } catch (Exception e) {
-                                                            if (m.replyAddress() == null) {
-                                                                // No reply handler
-                                                                throw wrapIfNecessary(e);
-                                                            } else {
-                                                                m.fail(ConsumeEvent.FAILURE_CODE, e.toString());
-                                                            }
-                                                        }
+                                            public void run() {
+                                                try {
+                                                    invoker.invoke(m);
+                                                } catch (Exception e) {
+                                                    if (m.replyAddress() == null) {
+                                                        // No reply handler
+                                                        throw wrapIfNecessary(e);
+                                                    } else {
+                                                        m.fail(ConsumeEvent.FAILURE_CODE, e.toString());
                                                     }
-                                                });
+                                                }
                                             }
                                         });
                                     } else {
-                                        Future<Void> future = dup.executeBlocking(new Callable<Void>() {
+                                        Future<Void> future = Vertx.currentContext().executeBlocking(new Callable<Void>() {
                                             @Override
                                             public Void call() {
                                                 try {
@@ -163,15 +158,10 @@ public class VertxEventBusConsumerRecorder {
                                                 }
                                                 return null;
                                             }
-                                        }, invoker.isOrdered());
+                                        }, ordered);
                                         future.onFailure(context::reportException);
                                     }
                                 } else {
-                                    // Will run on the context used for the consumer registration.
-                                    // It's a duplicated context, but we need to mark it as safe.
-                                    // The safety comes from the fact that it's instantiated by Vert.x for every
-                                    // message.
-                                    setCurrentContextSafe(true);
                                     try {
                                         invoker.invoke(m);
                                     } catch (Exception e) {
@@ -242,25 +232,9 @@ public class VertxEventBusConsumerRecorder {
     }
 
     @SuppressWarnings("unchecked")
-    private EventConsumerInvoker createInvoker(String invokerClassName) {
-        try {
-            ClassLoader cl = Thread.currentThread().getContextClassLoader();
-            if (cl == null) {
-                cl = VertxProducer.class.getClassLoader();
-            }
-            Class<? extends EventConsumerInvoker> invokerClazz = (Class<? extends EventConsumerInvoker>) cl
-                    .loadClass(invokerClassName);
-            return invokerClazz.getDeclaredConstructor().newInstance();
-        } catch (InstantiationException | IllegalAccessException | ClassNotFoundException | NoSuchMethodException
-                | InvocationTargetException e) {
-            throw new IllegalStateException("Unable to create invoker: " + invokerClassName, e);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
     private void registerCodecs(Map<Class<?>, Class<?>> codecByClass, List<Class<?>> selectorTypes) {
         EventBus eventBus = vertx.eventBus();
-        boolean isDevMode = ProfileManager.getLaunchMode() == LaunchMode.DEVELOPMENT;
+        boolean isDevMode = LaunchMode.current() == LaunchMode.DEVELOPMENT;
         for (Map.Entry<Class<?>, Class<?>> codecEntry : codecByClass.entrySet()) {
             Class<?> target = codecEntry.getKey();
             Class<?> codec = codecEntry.getValue();
@@ -323,9 +297,7 @@ public class VertxEventBusConsumerRecorder {
      * Adapted from {@link io.smallrye.config.ExpressionConfigSourceInterceptor}
      */
     private static String resolvePropertyExpression(String expr) {
-        // Force the runtime CL in order to make the DEV UI page work
-        final ClassLoader cl = VertxEventBusConsumerRecorder.class.getClassLoader();
-        final Config config = ConfigProviderResolver.instance().getConfig(cl);
+        final Config config = ConfigProvider.getConfig();
         final Expression expression = Expression.compile(expr, LENIENT_SYNTAX, NO_TRIM);
         final String expanded = expression.evaluate(new BiConsumer<ResolveContext<RuntimeException>, StringBuilder>() {
             @Override

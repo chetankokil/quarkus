@@ -15,8 +15,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Inject;
+import jakarta.inject.Provider;
 
 import org.apache.avro.specific.AvroGenerated;
 import org.apache.pulsar.client.api.Messages;
@@ -40,7 +42,9 @@ import org.reactivestreams.Processor;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 
+import io.quarkus.arc.InjectableInstance;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
+import io.quarkus.commons.classloading.ClassLoaderHelper;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.builditem.RunTimeConfigurationDefaultBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
@@ -53,6 +57,7 @@ import io.smallrye.config.SmallRyeConfigBuilder;
 import io.smallrye.config.common.MapBackedConfigSource;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
+import io.smallrye.reactive.messaging.GenericPayload;
 import io.smallrye.reactive.messaging.MutinyEmitter;
 import io.smallrye.reactive.messaging.Targeted;
 import io.smallrye.reactive.messaging.TargetedMessages;
@@ -135,9 +140,10 @@ public class DefaultSchemaConfigTest {
     private static IndexView index(List<Class<?>> classes) {
         Indexer indexer = new Indexer();
         for (Class<?> clazz : classes) {
+            final String resourceName = ClassLoaderHelper.fromClassNameToResourceName(clazz.getName());
             try {
                 try (InputStream stream = DefaultSchemaConfigTest.class.getClassLoader()
-                        .getResourceAsStream(clazz.getName().replace('.', '/') + ".class")) {
+                        .getResourceAsStream(resourceName)) {
                     indexer.index(stream);
                 }
             } catch (IOException e) {
@@ -2069,5 +2075,62 @@ public class DefaultSchemaConfigTest {
         }
 
     }
+
+    @Test
+    void pulsarGenericPayload() {
+        Tuple[] expectations = {
+                tuple("mp.messaging.incoming.channel1.schema", "STRING"),
+                tuple("mp.messaging.outgoing.out1.schema", "JsonObjectJSON_OBJECTSchema"),
+                tuple("mp.messaging.incoming.channel2.schema", "STRING"),
+                tuple("mp.messaging.outgoing.channel3.schema", "INT32"),
+                tuple("mp.messaging.outgoing.channel4.schema", "INT64"),
+        };
+        var generatedSchemas = Map.of("io.vertx.core.json.JsonObject", "JsonObjectJSON_OBJECTSchema");
+        doTest(expectations, generatedSchemas, GenericPayloadProducer.class);
+    }
+
+    private static class GenericPayloadProducer {
+        @Incoming("channel1")
+        @Outgoing("out1")
+        GenericPayload<JsonObject> method1(String msg) {
+            return null;
+        }
+
+        @Incoming("channel2")
+        void method2(GenericPayload<String> msg) {
+        }
+
+        @Outgoing("channel3")
+        GenericPayload<Integer> method3() {
+            return null;
+        }
+
+        @Outgoing("channel4")
+        Multi<GenericPayload<Long>> method4() {
+            return null;
+        }
+    }
+
+    @Test
+    void instanceInjectionPoint() {
+        Tuple[] expectations = {
+                tuple("mp.messaging.outgoing.channel1.schema", "STRING"),
+                tuple("mp.messaging.incoming.channel2.schema", "INT32"),
+                tuple("mp.messaging.outgoing.channel3.schema", "DOUBLE"),
+        };
+        doTest(expectations, InstanceInjectionPoint.class);
+    }
+
+    private static class InstanceInjectionPoint {
+        @Channel("channel1")
+        Instance<Emitter<String>> emitter1;
+
+        @Channel("channel2")
+        Provider<Multi<Integer>> channel2;
+
+        @Channel("channel3")
+        InjectableInstance<MutinyEmitter<Double>> channel3;
+    }
+
 
 }

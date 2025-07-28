@@ -15,7 +15,6 @@ import io.quarkus.elytron.security.deployment.ElytronPasswordMarkerBuildItem;
 import io.quarkus.elytron.security.deployment.SecurityRealmBuildItem;
 import io.quarkus.elytron.security.ldap.LdapRecorder;
 import io.quarkus.elytron.security.ldap.QuarkusDirContextFactory;
-import io.quarkus.elytron.security.ldap.config.LdapSecurityRealmRuntimeConfig;
 import io.quarkus.elytron.security.ldap.deployment.config.LdapSecurityRealmBuildTimeConfig;
 import io.quarkus.runtime.RuntimeValue;
 
@@ -40,21 +39,20 @@ class ElytronSecurityLdapProcessor {
     @Record(ExecutionTime.RUNTIME_INIT)
     void configureLdapRealmAuthConfig(LdapRecorder recorder,
             LdapSecurityRealmBuildTimeConfig ldapSecurityRealmBuildTimeConfig,
-            LdapSecurityRealmRuntimeConfig ldapSecurityRealmRuntimeConfig,
             BuildProducer<SecurityRealmBuildItem> securityRealm,
             BeanContainerBuildItem beanContainerBuildItem //we need this to make sure ArC is initialized
     ) throws Exception {
-        if (!ldapSecurityRealmBuildTimeConfig.enabled) {
+        if (!ldapSecurityRealmBuildTimeConfig.enabled()) {
             return;
         }
 
-        RuntimeValue<SecurityRealm> realm = recorder.createRealm(ldapSecurityRealmRuntimeConfig);
-        securityRealm.produce(new SecurityRealmBuildItem(realm, ldapSecurityRealmBuildTimeConfig.realmName, null));
+        RuntimeValue<SecurityRealm> realm = recorder.createRealm();
+        securityRealm.produce(new SecurityRealmBuildItem(realm, ldapSecurityRealmBuildTimeConfig.realmName(), null));
     }
 
     @BuildStep
     ElytronPasswordMarkerBuildItem marker(LdapSecurityRealmBuildTimeConfig ldapSecurityRealmBuildTimeConfig) {
-        if (!ldapSecurityRealmBuildTimeConfig.enabled) {
+        if (!ldapSecurityRealmBuildTimeConfig.enabled()) {
             return null;
         }
         return new ElytronPasswordMarkerBuildItem();

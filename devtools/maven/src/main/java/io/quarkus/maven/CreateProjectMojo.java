@@ -57,13 +57,13 @@ import io.quarkus.registry.catalog.ExtensionCatalog;
  */
 @Mojo(name = "create", requiresProject = false)
 public class CreateProjectMojo extends AbstractMojo {
-    static final String BAD_IDENTIFIER = "The specified %s identifier (%s) contains invalid characters. Valid characters are alphanumeric (A-Za-z), underscore, dash and dot.";
+    static final String BAD_IDENTIFIER = "The specified %s identifier (%s) contains invalid characters. Valid characters are alphanumeric characters (A-Za-z0-9), underscores, dashes and dots.";
     static final Pattern OK_ID = Pattern.compile("[0-9A-Za-z_.-]+");
 
     private static final String DEFAULT_GROUP_ID = "org.acme";
     private static final String DEFAULT_ARTIFACT_ID = "code-with-quarkus";
     private static final String DEFAULT_VERSION = "1.0.0-SNAPSHOT";
-    private static final String DEFAULT_EXTENSIONS = "resteasy";
+    private static final String DEFAULT_EXTENSIONS = "rest";
 
     @Parameter(defaultValue = "${project}")
     protected MavenProject project;
@@ -117,8 +117,8 @@ public class CreateProjectMojo extends AbstractMojo {
     private String javaVersion;
 
     /**
-     * The {@link #path} will define the REST path of the generated code when picking only one of those extensions resteasy,
-     * resteasy-reactive and spring-web.
+     * The {@link #path} will define the REST path of the generated code when picking only one of those extensions REST,
+     * RESTEasy Classic and Spring-Web.
      * <br />
      * If more than one of those extensions are picked, this parameter will be ignored.
      * <br />
@@ -130,8 +130,8 @@ public class CreateProjectMojo extends AbstractMojo {
     private String path;
 
     /**
-     * The {@link #className} will define the generated class names when picking only one of those extensions resteasy,
-     * resteasy-reactive and spring-web.
+     * The {@link #className} will define the generated class names when picking only one of those extensions REST,
+     * RESTEasy Classic and Spring-Web.
      * <br />
      * If more than one of those extensions are picked, then only the package name part will be used as {@link #packageName}
      * <br />
@@ -296,7 +296,7 @@ public class CreateProjectMojo extends AbstractMojo {
             catalog = CreateProjectHelper.completeCatalog(catalog, extensions, mvn);
             sanitizeOptions();
 
-            final List<ResourceLoader> codestartsResourceLoader = codestartLoadersBuilder()
+            final List<ResourceLoader> codestartsResourceLoader = codestartLoadersBuilder(log)
                     .catalog(catalog)
                     .artifactResolver(mvn)
                     .build();
@@ -331,8 +331,8 @@ public class CreateProjectMojo extends AbstractMojo {
                 parent.setArtifactId(parentPomModel.getArtifactId());
                 parent.setVersion(parentPomModel.getVersion());
                 subModulePomModel.setParent(parent);
-                MojoUtils.write(parentPomModel, pom);
-                MojoUtils.write(subModulePomModel, subModulePomFile);
+                MojoUtils.writeFormatted(parentPomModel, pom);
+                MojoUtils.writeFormatted(subModulePomModel, subModulePomFile);
             }
         } catch (Exception e) {
             throw new MojoExecutionException("Failed to generate Quarkus project", e);

@@ -2,10 +2,10 @@ package org.jboss.resteasy.reactive.server.mapping;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 
 public class RequestMapper<T> {
@@ -30,58 +30,110 @@ public class RequestMapper<T> {
             paths.add(i);
             max = Math.max(max, i.template.countPathParamNames());
         }
-        aggregates.forEach(this::sortAggregates);
-        aggregates.forEach(this::addPrefixPaths);
+        aggregates.forEach(new BiConsumer<>() {
+            @Override
+            public void accept(String stem, ArrayList<RequestPath<T>> list) {
+                Collections.sort(list);
+                pathMatcherBuilder.addPrefixPath(stem, list);
+            }
+        });
         maxParams = max;
         requestPaths = pathMatcherBuilder.build();
     }
 
-    private void sortAggregates(String stem, List<RequestPath<T>> list) {
-        list.sort(new Comparator<RequestPath<T>>() {
-            @Override
-            public int compare(RequestPath<T> t1, RequestPath<T> t2) {
-                return t2.template.compareTo(t1.template);
-            }
-        });
-    }
-
-    private void addPrefixPaths(String stem, ArrayList<RequestPath<T>> list) {
-        pathMatcherBuilder.addPrefixPath(stem, list);
-    }
-
+    /**
+     * Match the path to the UriTemplates. Returns the best match, meaning the least remaining path after match.
+     *
+     * @param path path to search UriTemplate for
+     * @return best RequestMatch, or null if the path has no match
+     */
     public RequestMatch<T> map(String path) {
-        var result = mapFromPathMatcher(path, requestPaths.match(path));
+        var result = mapFromPathMatcher(path, requestPaths.match(path), 0);
         if (result != null) {
             return result;
         }
 
         // the following code is meant to handle cases like https://github.com/quarkusio/quarkus/issues/30667
-        return mapFromPathMatcher(path, requestPaths.defaultMatch(path));
+        return mapFromPathMatcher(path, requestPaths.defaultMatch(path), 0);
+    }
+
+    /**
+     * Continue matching for the next best path starting from the last match, meaning the least remaining path after match.
+     *
+     * @param path path to search UriTemplate for
+     * @return another RequestMatch. Might return null if all matches are exhausted.
+     */
+    public RequestMatch<T> continueMatching(String path, RequestMatch<T> lastMatch) {
+        if (lastMatch == null) {
+            return null;
+        }
+
+        var initialMatches = requestPaths.match(path);
+        var result = mapFromPathMatcher(path, initialMatches, 0);
+        if (result != null) {
+            int idx = nextMatchStartingIndex(initialMatches, lastMatch);
+            return mapFromPathMatcher(path, initialMatches, idx);
+        }
+
+        // the following code is meant to handle cases like https://github.com/quarkusio/quarkus/issues/30667
+        initialMatches = requestPaths.defaultMatch(path);
+        result = mapFromPathMatcher(path, initialMatches, 0);
+        if (result != null) {
+            int idx = nextMatchStartingIndex(initialMatches, lastMatch);
+            return mapFromPathMatcher(path, initialMatches, idx);
+        }
+        return null;
+    }
+
+    private int nextMatchStartingIndex(PathMatcher.PathMatch<ArrayList<RequestPath<T>>> initialMatches,
+            RequestMatch<T> current) {
+        if (initialMatches.getValue() == null || initialMatches.getValue().isEmpty()) {
+            return -1;
+        }
+        for (int i = 0; i < initialMatches.getValue().size(); i++) {
+            if (initialMatches.getValue().get(i).template == current.template) {
+                i++;
+
+                if (i < initialMatches.getValue().size()) {
+                    return i;
+                }
+                return -1;
+            }
+        }
+
+        return -1;
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    private RequestMatch<T> mapFromPathMatcher(String path, PathMatcher.PathMatch<ArrayList<RequestPath<T>>> initialMatch) {
-        var value = initialMatch.getValue();
-        if (initialMatch.getValue() == null) {
+    private RequestMatch<T> mapFromPathMatcher(String path, PathMatcher.PathMatch<ArrayList<RequestPath<T>>> initialMatches,
+            int startIdx) {
+        var value = initialMatches.getValue();
+        if (value == null || startIdx < 0) {
             return null;
         }
         int pathLength = path.length();
-        for (int index = 0; index < ((List<RequestPath<T>>) value).size(); index++) {
-            RequestPath<T> potentialMatch = ((List<RequestPath<T>>) value).get(index);
+        for (int index = startIdx; index < value.size(); index++) {
+            RequestPath<T> potentialMatch = value.get(index);
             String[] params = (maxParams > 0) ? new String[maxParams] : EMPTY_STRING_ARRAY;
             int paramCount = 0;
             boolean matched = true;
             boolean prefixAllowed = potentialMatch.prefixTemplate;
-            int matchPos = initialMatch.getMatched().length();
+            int matchPos = initialMatches.getMatched().length();
             for (int i = 1; i < potentialMatch.template.components.length; ++i) {
                 URITemplate.TemplateComponent segment = potentialMatch.template.components[i];
                 if (segment.type == URITemplate.Type.CUSTOM_REGEX) {
-                    Matcher matcher = segment.pattern.matcher(path);
+                    // exclude any path end slash when matching a subdir, but include it in the matched length
+                    boolean endSlash = matchPos < path.length() && path.charAt(path.length() - 1) == '/';
+                    Matcher matcher = segment.pattern.matcher(
+                            endSlash ? path.substring(0, path.length() - 1) : path);
                     matched = matcher.find(matchPos);
                     if (!matched || matcher.start() != matchPos) {
                         break;
                     }
                     matchPos = matcher.end();
+                    if (endSlash) {
+                        matchPos++;
+                    }
                     for (String group : segment.groups) {
                         params[paramCount++] = matcher.group(group);
                     }
@@ -145,7 +197,7 @@ public class RequestMapper<T> {
         return null;
     }
 
-    public static class RequestPath<T> implements Dumpable {
+    public static class RequestPath<T> implements Dumpable, Comparable<RequestPath<T>> {
         public final boolean prefixTemplate;
         public final URITemplate template;
         public final T value;
@@ -170,6 +222,11 @@ public class RequestMapper<T> {
             indent(level + 1);
             System.err.println("template: ");
             template.dump(level + 2);
+        }
+
+        @Override
+        public int compareTo(RequestPath<T> o) {
+            return o.template.compareTo(this.template);
         }
     }
 

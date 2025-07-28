@@ -14,7 +14,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import jakarta.ws.rs.RuntimeType;
 import jakarta.ws.rs.WebApplicationException;
@@ -42,6 +44,8 @@ import org.jboss.resteasy.reactive.common.util.CaseInsensitiveMap;
 import org.jboss.resteasy.reactive.spi.ThreadSetupAction;
 
 import io.netty.handler.codec.http.multipart.InterfaceHttpData;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.Uni;
 import io.smallrye.stork.api.ServiceInstance;
 import io.vertx.core.Context;
 import io.vertx.core.MultiMap;
@@ -57,11 +61,14 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
 
     public static final String INVOKED_METHOD_PROP = "org.eclipse.microprofile.rest.client.invokedMethod";
     public static final String INVOKED_METHOD_PARAMETERS_PROP = "io.quarkus.rest.client.invokedMethodParameters";
+    public static final String INVOKED_EXCEPTION_MAPPER_CLASS_NAME_PROP = "io.quarkus.rest.client.invokedExceptionMapperClass";
     public static final String DEFAULT_CONTENT_TYPE_PROP = "io.quarkus.rest.client.defaultContentType";
-    public static final String DEFAULT_USER_AGENT_VALUE = "Resteasy Reactive Client";
+    public static final String DEFAULT_USER_AGENT_VALUE = "Quarkus REST Client";
     private static final String TMP_FILE_PATH_KEY = "tmp_file_path";
 
     static final MediaType IGNORED_MEDIA_TYPE = new MediaType("ignored", "ignored");
+    // TODO: the following property should really be provided by an SPI
+    private static final String DEFAULT_EXCEPTION_MAPPER_CLASS_NAME = "io.quarkus.rest.client.reactive.runtime.DefaultMicroprofileRestClientExceptionMapper";
 
     private final HttpClient httpClient;
     // Changeable by the request filter
@@ -102,6 +109,8 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     private ServiceInstance callStatsCollector;
     private Map<Class<?>, MultipartResponseData> multipartResponsesData;
     private StackTraceElement[] callerStackTrace;
+
+    private final AtomicBoolean userCanceled = new AtomicBoolean();
 
     public RestClientRequestContext(ClientImpl restClient,
             HttpClient httpClient, String httpMethod, URI uri,
@@ -167,6 +176,16 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
         return null;
     }
 
+    public boolean invokedMethodReturnsAsyncType() {
+        Method invokedMethod = getInvokedMethod();
+        if (invokedMethod == null) {
+            return false;
+        }
+        Class<?> returnType = invokedMethod.getReturnType();
+        return Uni.class.isAssignableFrom(returnType) || Multi.class.isAssignableFrom(returnType)
+                || CompletionStage.class.isAssignableFrom(returnType);
+    }
+
     public Annotation[] getMethodDeclaredAnnotationsSafe() {
         Method invokedMethod = getInvokedMethod();
         if (invokedMethod != null) {
@@ -178,13 +197,20 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     @Override
     protected Throwable unwrapException(Throwable t) {
         var res = super.unwrapException(t);
-        if (res instanceof WebApplicationException) {
-            var webApplicationException = (WebApplicationException) res;
+
+        var invokedExceptionMapperClassNameObj = properties.get(INVOKED_EXCEPTION_MAPPER_CLASS_NAME_PROP);
+        if (invokedExceptionMapperClassNameObj instanceof String invokedExceptionMapperClassName) {
+            if (!DEFAULT_EXCEPTION_MAPPER_CLASS_NAME.equals(invokedExceptionMapperClassName)) {
+                // in this case a custom exception mapper provided the exception, so we honor it
+                return res;
+            }
+        }
+
+        if (res instanceof WebApplicationException webApplicationException) {
             var message = webApplicationException.getMessage();
             var invokedMethodObject = properties.get(INVOKED_METHOD_PROP);
-            if ((invokedMethodObject instanceof Method) && !disableContextualErrorMessages) {
-                var invokedMethod = (Method) invokedMethodObject;
-                message = "Received: '" + message + "' when invoking: Rest Client method: '"
+            if ((invokedMethodObject instanceof Method invokedMethod) && !disableContextualErrorMessages) {
+                message = "Received: '" + message + "' when invoking REST Client method: '"
                         + invokedMethod.getDeclaringClass().getName() + "#"
                         + invokedMethod.getName() + "'";
             }
@@ -428,6 +454,10 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
         return requestHeaders;
     }
 
+    public MultivaluedMap<String, String> getRequestHeadersAsMap() {
+        return requestHeaders.asMap();
+    }
+
     public String getHttpMethod() {
         return httpMethod;
     }
@@ -494,6 +524,15 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
         return entity != null && ((entity.getEntity() instanceof File) || (entity.getEntity() instanceof Path));
     }
 
+    public boolean isInputStreamUpload() {
+        return entity != null && entity.getEntity() instanceof InputStream;
+    }
+
+    public boolean isMultiBufferUpload() {
+        // we don't check the generic because Multi<Buffer> is checked at build time
+        return entity != null && entity.getEntity() instanceof Multi;
+    }
+
     public boolean isMultipart() {
         return entity != null && entity.getEntity() instanceof QuarkusMultipartForm;
     }
@@ -512,6 +551,14 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
         }
         Class<?> rawType = responseType.getRawType();
         return InputStream.class.equals(rawType);
+    }
+
+    public boolean isJakartaResponseDownload() {
+        if (responseType == null) {
+            return false;
+        }
+        Class<?> rawType = responseType.getRawType();
+        return Response.class.equals(rawType);
     }
 
     public String getTmpFilePath() {
@@ -576,5 +623,13 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     @Override
     protected boolean isRequestScopeManagementRequired() {
         return false;
+    }
+
+    public void setUserCanceled() {
+        userCanceled.set(true);
+    }
+
+    public boolean isUserCanceled() {
+        return userCanceled.get();
     }
 }

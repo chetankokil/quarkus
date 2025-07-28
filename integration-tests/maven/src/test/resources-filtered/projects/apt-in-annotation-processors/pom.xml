@@ -32,7 +32,7 @@
     <!-- insert test dependencies here -->
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-resteasy-reactive</artifactId>
+      <artifactId>quarkus-rest</artifactId>
     </dependency>
     <!-- Use this rather than quarkus-hibernate-orm which would force us to define a datasource we don't need -->
     <dependency>
@@ -65,7 +65,7 @@
 		  <annotationProcessorPaths>
 		    <path>
               <groupId>org.hibernate.orm</groupId>
-              <artifactId>hibernate-jpamodelgen</artifactId>
+              <artifactId>hibernate-processor</artifactId>
 		    </path>
 		    <path>
               <groupId>com.querydsl</groupId>
@@ -76,7 +76,7 @@
 		  </annotationProcessorPaths>
 		  <!-- Only include the Hibernate one -->
 		  <annotationProcessors>
-			  <annotationProcessor>org.hibernate.jpamodelgen.JPAMetaModelEntityProcessor</annotationProcessor>
+			  <annotationProcessor>org.hibernate.processor.HibernateProcessor</annotationProcessor>
 		  </annotationProcessors>
 		</configuration>
       </plugin>
@@ -100,7 +100,7 @@
     <profile>
       <id>native</id>
       <properties>
-        <quarkus.package.type>native</quarkus.package.type>
+        <quarkus.native.enabled>true</quarkus.native.enabled>
       </properties>
     </profile>
     <profile>

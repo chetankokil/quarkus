@@ -1,25 +1,21 @@
 package io.quarkus.flyway.runtime;
 
-import java.util.Collections;
 import java.util.Map;
 
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
-import io.quarkus.runtime.annotations.ConfigItem;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
+import io.quarkus.runtime.annotations.ConfigDocSection;
 import io.quarkus.runtime.annotations.ConfigPhase;
 import io.quarkus.runtime.annotations.ConfigRoot;
+import io.smallrye.config.ConfigMapping;
+import io.smallrye.config.WithDefault;
+import io.smallrye.config.WithDefaults;
+import io.smallrye.config.WithParentName;
+import io.smallrye.config.WithUnnamedKey;
 
-@ConfigRoot(name = "flyway", phase = ConfigPhase.BUILD_AND_RUN_TIME_FIXED)
-public final class FlywayBuildTimeConfig {
-
-    /**
-     * Gets the {@link FlywayDataSourceBuildTimeConfig} for the given datasource name.
-     */
-    public FlywayDataSourceBuildTimeConfig getConfigForDataSourceName(String dataSourceName) {
-        if (DataSourceUtil.isDefault(dataSourceName)) {
-            return defaultDataSource;
-        }
-        return namedDataSources.getOrDefault(dataSourceName, FlywayDataSourceBuildTimeConfig.defaultConfig());
-    }
+@ConfigRoot(phase = ConfigPhase.BUILD_AND_RUN_TIME_FIXED)
+@ConfigMapping(prefix = "quarkus.flyway")
+public interface FlywayBuildTimeConfig {
 
     /**
      * Whether Flyway is enabled *during the build*.
@@ -28,18 +24,16 @@ public final class FlywayBuildTimeConfig {
      *
      * @asciidoclet
      */
-    @ConfigItem(defaultValue = "true")
-    public boolean enabled;
+    @WithDefault("true")
+    boolean enabled();
 
     /**
-     * Flyway configuration for the default datasource.
+     * Datasources.
      */
-    @ConfigItem(name = ConfigItem.PARENT)
-    public FlywayDataSourceBuildTimeConfig defaultDataSource;
-
-    /**
-     * Flyway configurations for named datasources.
-     */
-    @ConfigItem(name = ConfigItem.PARENT)
-    public Map<String, FlywayDataSourceBuildTimeConfig> namedDataSources = Collections.emptyMap();
+    @ConfigDocMapKey("datasource-name")
+    @ConfigDocSection
+    @WithParentName
+    @WithUnnamedKey(DataSourceUtil.DEFAULT_DATASOURCE_NAME)
+    @WithDefaults
+    Map<String, FlywayDataSourceBuildTimeConfig> datasources();
 }

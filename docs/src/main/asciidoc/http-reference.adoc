@@ -10,7 +10,7 @@ include::_attributes.adoc[]
 :numbered:
 :sectnums:
 :sectnumlevels: 4
-:topics: http,web,webjars,vertx,servlet,undertow
+:topics: http,web,webjars,mvnpm,vertx,servlet,undertow
 :extensions: io.quarkus:quarkus-vertx-http
 
 This document clarifies different HTTP functionalities available in Quarkus.
@@ -21,7 +21,9 @@ For Servlet support, Quarkus employs a customized Undertow version that operates
 When Undertow is present, RESTEasy functions as a Servlet filter.
 In its absence, RESTEasy operates directly on Vert.x without involving Servlets.
 
-== Serving Static Resources
+== Serving static resources
+
+If you are looking to use Quarkus for a web application, look at the xref:web.adoc[Quarkus for the Web] guide.
 
 === From the application jar
 
@@ -30,51 +32,15 @@ was chosen as it is the standard location for resources in `jar` files as define
 Quarkus can be used without Servlet, following this convention allows existing code that places its resources in this
 location to function correctly.
 
-=== From WebJars
+=== From web dependencies like webjars or mvnpm
 
-If you are using webjars, like the following JQuery one:
-
-[source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
-.pom.xml
-----
-<dependency>
-    <groupId>org.webjars</groupId>
-    <artifactId>jquery</artifactId>
-    <version>3.1.1</version>
-</dependency>
-----
-
-[source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
-.build.gradle
-----
-implementation("org.webjars:jquery:3.1.1")
-----
-
-and rather write `/webjars/jquery/jquery.min.js` instead of `/webjars/jquery/3.1.1/jquery.min.js`
-in your HTML files, you can add the `quarkus-webjars-locator` extension to your project.
-To use it, add the following to your project's dependencies:
-
-[source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
-.pom.xml
-----
-<dependency>
-    <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-webjars-locator</artifactId>
-</dependency>
-----
-
-[source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
-.build.gradle
-----
-implementation("io.quarkus:quarkus-webjars-locator")
-----
+Look at the xref:web-dependency-locator.adoc[Web dependency locator] guide for details on how to use https://www.webjars.org[WebJars], https://mvnpm.org[mvnpm] and https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap[importmaps]
 
 === From a local directory
 
 Static resources can be served from a local directory by installing an additional route in the Vert.x router.
 
-For instance, to serve resources from the `static/` directory relative to the current path at http://localhost:8080/static/,
-you can install the following route:
+For instance, to serve resources from the `static/` directory relative to the current path at http://localhost:8080/static/, you can install the following route:
 
 [source,java]
 ----
@@ -102,16 +68,18 @@ The response body of a static resource is not compressed by default.
 You can enable the HTTP compression support by means of `quarkus.http.enable-compression=true`.
 If compression support is enabled then the response body is compressed if the `Content-Type` header derived from the file name of a resource is a compressed media type as configured via `quarkus.http.compress-media-types`.
 
-TIP: By default, the following list of media types is compressed: `text/html`, `text/plain`, `text/xml`, `text/css`, `text/javascript` and `application/javascript`.
+TIP: By default, the following list of media types is compressed: `text/html`, `text/plain`, `text/xml`, `text/css`, `text/javascript`, `application/javascript`, `application/json`, `application/graphql+json` and `application/xhtml+xml`.
 
-NOTE: If the client does not support HTTP compression then the response body is not compressed.
+NOTE: If the client does not indicate its support for HTTP compression in a request header, e.g. `Accept-Encoding: deflate, gzip, br`, then the response body is not compressed.
+
+TIP: Brotli compression is not available by default. You can enable it by setting `quarkus.http.compressors=deflate,gzip,br`. In case of building native image, it adds around 1MB to your executable size.
 
 [[static-resources-config]]
 === Other Configurations
 
 Additionally, the index page for static resources can be changed from default `index.html`, the hidden files (e.g. dot files) can be indicated as not served, the range requests can be disabled, and the caching support (e.g. caching headers and file properties cache) can be configured.
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-static-resources-config.adoc[leveloffset=+1, opts=optional]
+include::{generated-dir}/config/quarkus-vertx-http_quarkus.http.static-resources.adoc[leveloffset=+1, opts=optional]
 
 [[context-path]]
 == Configuring the Context path
@@ -162,7 +130,42 @@ In both cases, a password must be provided. See the designated paragraph for a d
 To enable TLS/SSL support with native executables, please refer to our xref:native-and-ssl.adoc[Using SSL With Native Executables guide].
 ====
 
-=== Providing a certificate and key file
+=== Using the TLS centralized configuration
+
+Quarkus provides a xref:./tls-registry-reference.adoc[TLS centralized configuration] that can be used to configure the server's TLS context.
+It is the recommended approach to configure HTTPS.
+
+To configure the HTTP server to use HTTPS, you can use the following configuration:
+
+[source,properties]
+----
+quarkus.tls.key-store.pem.0.cert=server.crt
+quarkus.tls.key-store.pem.0.key=server.key
+quarkus.http.insecure-requests=disabled # Reject HTTP requests
+----
+
+To use a `p12` (PKCS12) key store, apply the following configuration:
+
+[source,properties]
+----
+quarkus.tls.key-store.p12.path=server-keystore.p12
+quarkus.tls.key-store.p12.password=secret
+quarkus.http.insecure-requests=disabled # Reject HTTP requests
+----
+
+Instead of the default configuration, you can use a named configuration:
+
+[source,properties]
+----
+quarkus.tls.https.key-store.p12.path=server-keystore.p12
+quarkus.tls.https.key-store.p12.password=secret
+quarkus.http.insecure-requests=disabled
+quarkus.http.tls-configuration-name=https
+----
+
+=== Configuring the HTTP server directly
+
+If you do not want to use the TLS registry, you can configure the HTTP server directly.
 
 If the certificate has not been loaded into a keystore, it can be provided directly using the properties listed below.
 Quarkus will first try to load the given files as resources, and uses the filesystem as a fallback.
@@ -175,8 +178,6 @@ Your `application.properties` would then look like this:
 quarkus.http.ssl.certificate.files=/path/to/certificate
 quarkus.http.ssl.certificate.key-files=/path/to/key
 ----
-
-=== Providing a keystore
 
 An alternate solution is to directly provide a keystore which already contains a default entry with a certificate.
  You will need to at least provide the file and a password.
@@ -191,14 +192,12 @@ quarkus.http.ssl.certificate.key-store-file=/path/to/keystore
 ----
 
 As an optional hint, the type of keystore can be provided as one of the options listed.
-If the type is not provided, Quarkus will try to deduce it from the file extensions, defaulting to type JKS.
+If the type is not provided, Quarkus will try to deduce it from the file extensions.
 
 [source,properties]
 ----
 quarkus.http.ssl.certificate.key-store-file-type=[one of JKS, JCEKS, P12, PKCS12, PFX]
 ----
-
-=== Setting the password
 
 In both aforementioned scenarios, a password needs to be provided to create/load the keystore with.
 The password can be set in your `application.properties` (in plain-text) using the following property:
@@ -248,6 +247,10 @@ The files are reloaded from the same location as they were initially loaded from
 If there is no content change, the reloading is a no-op.
 It the reloading fails, the server will continue to use the previous certificates.
 
+=== Preventing client renegotiation
+
+See xref:./tls-registry-reference.adoc#client-renegotiation[Preventing client renegotiation] for more information.
+
 == Additional HTTP Headers
 
 To enable HTTP headers to be sent on every response, add the following properties:
@@ -270,7 +273,7 @@ quarkus.http.header.Pragma.methods=GET,HEAD
 
 This will apply the `Pragma` header only when the `/headers/pragma` resource is called with a `GET` or a `HEAD` method
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-header-config.adoc[leveloffset=+1, opts=optional]
+include::{generated-dir}/config/quarkus-vertx-http_quarkus.http.header.adoc[leveloffset=+1, opts=optional]
 
 === Additional HTTP Headers per path
 
@@ -310,7 +313,7 @@ quarkus.http.filter.any-order.matches=/paths/order.*
 
 Will include the `Cache-Control: max-age=1` header when `/paths/order` is requested.
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-filter-config.adoc[leveloffset=+1, opts=optional]
+include::{generated-dir}/config/quarkus-vertx-http_quarkus.http.filter.adoc[leveloffset=+1, opts=optional]
 
 == Support 100-Continue in vert.x
 
@@ -359,7 +362,7 @@ For more information about the CORS filter that Quarkus provides, see the Quarku
 
 == HTTP Limits Configuration
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-server-limits-config.adoc[leveloffset=+1, opts=optional]
+include::{generated-dir}/config/quarkus-vertx-http_quarkus.http.limits.adoc[leveloffset=+1, opts=optional]
 
 == Configure traffic shaping
 
@@ -404,7 +407,7 @@ When one of the threshold is reached, no write happens for that period of time.
 You can add HTTP request logging by configuring it in `application.properties`. There are two options for logging,
 either logging to the standard JBoss logging output, or logging to a dedicated file.
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-access-log-config.adoc[opts=optional, leveloffset=+1]
+include::{generated-dir}/config/quarkus-vertx-http_quarkus.http.access-log.adoc[opts=optional, leveloffset=+1]
 
 [frame="topbot",options="header"]
 |===
@@ -421,6 +424,7 @@ include::{generated-dir}/config/quarkus-vertx-http-config-group-access-log-confi
 |First line of the request                                                    | `%r`     | `%{REQUEST_LINE}`
 |HTTP status code of the response                                             | `%s`     | `%{RESPONSE_CODE}`
 |Date and time, in Common Log Format format                                   | `%t`     | `%{DATE_TIME}`
+|Date and time as defined by a DateTimeFormatter compliant string             |          | `%{time,date_fime_formatter_string}`
 |Remote user that was authenticated                                           | `%u`     | `%{REMOTE_USER}`
 |Requested URL path                                                           | `%U`     | `%{REQUEST_URL}`
 |Request relative path                                                        | `%R`     | `%{REQUEST_PATH}`
@@ -440,6 +444,21 @@ include::{generated-dir}/config/quarkus-vertx-http-config-group-access-log-confi
 |Response header                                                              |          | `%{o,response_header_name}`
 |Vert.x Routing Context Internal Data                                         |          | `%{d,map_key}`
 |Vert.x MDC data (e.g. 'traceId' for OpenTelemetry)                           |          | `%{X,mdc-key}`
+|===
+
+Set `quarkus.http.access-log.consolidate-rerouted-requests=true` to enable support for the modifier `<`. This modifier can be used for requests that have been internally redirected to consult the original request.
+The following attributes support this modifier:
+
+
+[frame="topbot",options="header"]
+|===
+|Attribute                                                                    |Short Form|Long Form
+|First line of the request                                                    | `%<r`    | `%{<REQUEST_LINE}`
+|Request method                                                               | `%<m`    | `%{<METHOD}`
+|Request relative path                                                        | `%<R`    | `%{<REQUEST_PATH}`
+|Requested URL path                                                           | `%<U`    | `%{<REQUEST_URL}`
+|Query string (prepended with a '?' if it exists, otherwise an empty string)  | `%<q`    | `%{<QUERY_STRING}`
+|Query parameter                                                              |          | `%{<q,query_param_name}`
 |===
 
 [NOTE]
@@ -471,7 +490,7 @@ import jakarta.inject.Singleton;
 import io.quarkus.vertx.http.HttpServerOptionsCustomizer;
 
 @Singleton <1>
-public static class MyCustomizer implements HttpServerOptionsCustomizer {
+public class MyCustomizer implements HttpServerOptionsCustomizer {
 
     @Override
     public void customizeHttpServer(HttpServerOptions options) { <2>
@@ -481,6 +500,27 @@ public static class MyCustomizer implements HttpServerOptionsCustomizer {
 ----
 <1> By making the class a managed bean, Quarkus will take the customizer into account when it starts the Vert.x servers
 <2> In this case, we only care about customizing the HTTP server, so we just override the `customizeHttpServer` method, but users should be aware that `HttpServerOptionsCustomizer` allows configuring the HTTPS and Domain Socket servers as well
+
+
+== How to execute logic when HTTP server started
+
+In order to execute some custom action when the HTTP server is started you'll need to declare an _asynchronous_ CDI observer method. 
+Quarkus _asynchronously_ fires CDI events of types `io.quarkus.vertx.http.HttpServerStart`, `io.quarkus.vertx.http.HttpsServerStart` and `io.quarkus.vertx.http.DomainSocketServerStart` when the corresponding HTTP server starts listening on the configured host and port.
+
+.`HttpServerStart` example
+[source,java]
+----
+@ApplicationScoped
+public class MyListener {
+
+   void httpStarted(@ObservesAsync HttpServerStart start) { <1>
+      // ...notified when the HTTP server starts listening
+   }
+}
+----
+<1> An asynchronous `HttpServerStart` observer method may be declared by annotating an `HttpServerStart` parameter with `@jakarta.enterprise.event.ObservesAsync`.
+
+NOTE: It's not possible to use the `StartupEvent` for this particular use case because this CDI event is fired before the HTTP server is started.
 
 [[reverse-proxy]]
 == Running behind a reverse proxy
@@ -517,7 +557,7 @@ quarkus.http.proxy.trusted-proxies=127.0.0.1 <1>
 ----
 <1> Configure trusted proxy with the IP address `127.0.0.1`. Request headers from any other address are going to be ignored.
 
-Both configurations related to standard and non-standard headers can be combined, although the standard headers configuration will have precedence. However, combining them has security implications as clients can forge requests with a forwarded header that is not overwritten by the proxy. Therefore, proxies should strip unexpected `X-Forwarded` or `X-Forwarded-*` headers from the client.
+Both configurations related to standard and non-standard headers can be combined, although the standard headers configuration will have precedence. However, combining them has security implications as clients can forge requests with a forwarded header that is not overwritten by the proxy. Therefore, proxies should strip unexpected `Forwarded` or `X-Forwarded-*` headers from the client.
 
 Supported forwarding address headers are:
 

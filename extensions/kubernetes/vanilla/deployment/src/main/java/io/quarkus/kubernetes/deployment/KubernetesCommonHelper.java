@@ -1,15 +1,7 @@
-
 package io.quarkus.kubernetes.deployment;
 
 import static io.dekorate.kubernetes.decorator.AddServiceResourceDecorator.distinct;
-import static io.quarkus.kubernetes.deployment.Constants.DEFAULT_HTTP_PORT;
-import static io.quarkus.kubernetes.deployment.Constants.HTTP_PORT;
-import static io.quarkus.kubernetes.deployment.Constants.KNATIVE;
-import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_BUILD_TIMESTAMP;
-import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_COMMIT_ID;
-import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_QUARKUS_VERSION;
-import static io.quarkus.kubernetes.deployment.Constants.QUARKUS_ANNOTATIONS_VCS_URL;
-import static io.quarkus.kubernetes.deployment.Constants.SERVICE_ACCOUNT;
+import static io.quarkus.kubernetes.deployment.Constants.*;
 
 import java.nio.file.Path;
 import java.time.ZoneOffset;
@@ -28,8 +20,10 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
+import io.dekorate.kubernetes.annotation.ImagePullPolicy;
 import io.dekorate.kubernetes.config.Annotation;
 import io.dekorate.kubernetes.config.ConfigMapVolumeBuilder;
 import io.dekorate.kubernetes.config.EnvBuilder;
@@ -82,9 +76,9 @@ import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.rbac.PolicyRule;
-import io.fabric8.kubernetes.api.model.rbac.PolicyRuleBuilder;
 import io.quarkus.builder.Version;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
+import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
 import io.quarkus.deployment.pkg.PackageConfig;
@@ -93,14 +87,17 @@ import io.quarkus.kubernetes.client.spi.KubernetesClientCapabilityBuildItem;
 import io.quarkus.kubernetes.spi.CustomProjectRootBuildItem;
 import io.quarkus.kubernetes.spi.DecoratorBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesAnnotationBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesClusterRoleBindingBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesClusterRoleBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesCommandBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesEffectiveServiceAccountBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesHealthLivenessPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesHealthReadinessPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesHealthStartupPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesInitContainerBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesJobBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesLabelBuildItem;
+import io.quarkus.kubernetes.spi.KubernetesNamespaceBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesPortBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesProbePortNameBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesRoleBindingBuildItem;
@@ -109,7 +106,9 @@ import io.quarkus.kubernetes.spi.KubernetesServiceAccountBuildItem;
 import io.quarkus.kubernetes.spi.Property;
 import io.quarkus.kubernetes.spi.RoleRef;
 import io.quarkus.kubernetes.spi.Subject;
+import io.quarkus.kubernetes.spi.Targetable;
 
+@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class KubernetesCommonHelper {
     private static final Logger LOG = Logger.getLogger(KubernetesCommonHelper.class);
     private static final String ANY = null;
@@ -117,7 +116,6 @@ public class KubernetesCommonHelper {
     private static final String[] PROMETHEUS_ANNOTATION_TARGETS = { "Service",
             "Deployment", "DeploymentConfig" };
     private static final String DEFAULT_ROLE_NAME_VIEW = "view";
-    private static final List<String> LIST_WITH_EMPTY = List.of("");
     private static final String SCHEME_HTTP = "HTTP";
     private static final String SCHEME_HTTPS = "HTTPS";
 
@@ -125,7 +123,8 @@ public class KubernetesCommonHelper {
             Optional<CustomProjectRootBuildItem> customProjectRoot, OutputTargetBuildItem outputTarget,
             PackageConfig packageConfig) {
         return createProject(app, customProjectRoot, outputTarget.getOutputDirectory()
-                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(), packageConfig.getRunnerSuffix())));
+                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(),
+                        packageConfig.computedRunnerSuffix())));
     }
 
     public static Optional<Project> createProject(ApplicationInfoBuildItem app,
@@ -155,7 +154,7 @@ public class KubernetesCommonHelper {
      * Creates the configurator build items.
      */
     public static Optional<Port> getPort(List<KubernetesPortBuildItem> ports, KubernetesConfig config) {
-        return getPort(ports, config, config.ingress.targetPort);
+        return getPort(ports, config, config.ingress().targetPort());
     }
 
     /**
@@ -163,7 +162,7 @@ public class KubernetesCommonHelper {
      */
     public static Optional<Port> getPort(List<KubernetesPortBuildItem> ports, PlatformConfiguration config, String targetPort) {
         return combinePorts(ports, config).values().stream()
-                .filter(distinct(p -> p.getName()))
+                .filter(distinct(Port::getName))
                 .filter(p -> p.getName().equals(targetPort))
                 .findFirst();
     }
@@ -185,7 +184,7 @@ public class KubernetesCommonHelper {
                 .map(e -> new PortBuilder().withName(e.getKey()).withContainerPort(e.getValue()).build())
                 .collect(Collectors.toMap(Port::getName, Function.identity(), (first, second) -> first))); //prevent dublicate keys
 
-        config.getPorts().entrySet().forEach(e -> {
+        config.ports().entrySet().forEach(e -> {
             String name = e.getKey();
             Port configuredPort = PortConverter.convert(e);
             Port buildItemPort = allPorts.get(name);
@@ -213,14 +212,15 @@ public class KubernetesCommonHelper {
      */
     public static void printMessageAboutPortsThatCantChange(String target, List<KubernetesPortBuildItem> ports,
             PlatformConfiguration configuration) {
-        ports.stream().forEach(port -> {
-            boolean enabled = port.isEnabled() || configuration.getPorts().containsKey(port.getName());
+        ports.forEach(port -> {
+            boolean enabled = port.isEnabled() || configuration.ports().containsKey(port.getName());
             if (enabled) {
                 String name = "quarkus." + target + ".ports." + port.getName() + ".container-port";
-                Optional<Integer> value = Optional.ofNullable(configuration.getPorts().get(port.getName()))
-                        .map(p -> p.containerPort)
+                Optional<Integer> value = Optional.ofNullable(configuration.ports().get(port.getName()))
+                        .map(p -> p.containerPort())
                         .filter(OptionalInt::isPresent)
                         .map(OptionalInt::getAsInt);
+                @SuppressWarnings({ "rawtypes", "unchecked" })
                 Property<Integer> kubernetesPortProperty = new Property(name, Integer.class, value, null, false);
                 PropertyUtil.printMessages(String.format("The container port %s", port.getName()), target,
                         kubernetesPortProperty,
@@ -233,6 +233,7 @@ public class KubernetesCommonHelper {
      * Creates the common decorator build items.
      */
     public static List<DecoratorBuildItem> createDecorators(Optional<Project> project, String target, String name,
+            Optional<KubernetesNamespaceBuildItem> namespace,
             PlatformConfiguration config,
             Optional<MetricsCapabilityBuildItem> metricsConfiguration,
             Optional<KubernetesClientCapabilityBuildItem> kubernetesClientConfiguration,
@@ -246,43 +247,42 @@ public class KubernetesCommonHelper {
             Optional<KubernetesHealthStartupPathBuildItem> startupPath,
             List<KubernetesRoleBuildItem> roles,
             List<KubernetesClusterRoleBuildItem> clusterRoles,
-            List<KubernetesServiceAccountBuildItem> serviceAccounts,
-            List<KubernetesRoleBindingBuildItem> roleBindings) {
+            List<KubernetesEffectiveServiceAccountBuildItem> serviceAccounts,
+            List<KubernetesRoleBindingBuildItem> roleBindings,
+            List<KubernetesClusterRoleBindingBuildItem> clusterRoleBindings) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
-        result.addAll(createLabelDecorators(project, target, name, config, labels));
+        result.addAll(createLabelDecorators(target, name, config, labels));
         result.addAll(createAnnotationDecorators(project, target, name, config, metricsConfiguration, annotations, port));
-        result.addAll(createPodDecorators(project, target, name, config));
-        result.addAll(createContainerDecorators(project, target, name, config));
-        result.addAll(createMountAndVolumeDecorators(project, target, name, config));
-        result.addAll(createAppConfigVolumeAndEnvDecorators(project, target, name, config));
+        result.addAll(createPodDecorators(target, name, config));
+        result.addAll(createContainerDecorators(target, name, namespace, config));
+        result.addAll(createMountAndVolumeDecorators(target, name, config));
+        result.addAll(createAppConfigVolumeAndEnvDecorators(target, name, config));
 
-        result.addAll(createCommandDecorator(project, target, name, config, command));
-        result.addAll(createArgsDecorator(project, target, name, config, command));
+        result.addAll(createCommandDecorator(target, name, config, command));
+        result.addAll(createArgsDecorator(target, name, config, command));
 
         // Handle Pull Secrets
-        if (config.isGenerateImagePullSecret()) {
-            image.ifPresent(i -> {
-                i.getRegistry().ifPresent(registry -> {
-                    if (i.getUsername().isPresent() && i.getPassword().isPresent()) {
-                        String imagePullSecret = name + "-pull-secret";
-                        result.add(new DecoratorBuildItem(target, new AddImagePullSecretDecorator(name, imagePullSecret)));
-                        result.add(new DecoratorBuildItem(target, new AddDockerConfigJsonSecretDecorator(imagePullSecret,
-                                registry, i.username.get(), i.password.get())));
-                    }
-                });
-            });
+        if (config.generateImagePullSecret()) {
+            image.ifPresent(i -> i.getRegistry().ifPresent(registry -> {
+                if (i.getUsername().isPresent() && i.getPassword().isPresent()) {
+                    String imagePullSecret = name + "-pull-secret";
+                    result.add(new DecoratorBuildItem(target, new AddImagePullSecretDecorator(name, imagePullSecret)));
+                    result.add(new DecoratorBuildItem(target, new AddDockerConfigJsonSecretDecorator(imagePullSecret,
+                            registry, i.username.get(), i.password.get())));
+                }
+            }));
         }
 
         // Handle Probes
-        if (!port.isEmpty()) {
-            result.addAll(createProbeDecorators(name, target, config.getLivenessProbe(), config.getReadinessProbe(),
-                    config.getStartupProbe(), livenessProbePath, readinessProbePath, startupPath));
+        if (port.isPresent()) {
+            result.addAll(createProbeDecorators(name, target, config.livenessProbe(), config.readinessProbe(),
+                    config.startupProbe(), livenessProbePath, readinessProbePath, startupPath));
         }
 
         // Handle RBAC
         result.addAll(createRbacDecorators(name, target, config, kubernetesClientConfiguration, roles, clusterRoles,
-                serviceAccounts, roleBindings));
+                serviceAccounts, roleBindings, clusterRoleBindings));
         return result;
     }
 
@@ -291,8 +291,9 @@ public class KubernetesCommonHelper {
             Optional<KubernetesClientCapabilityBuildItem> kubernetesClientConfiguration,
             List<KubernetesRoleBuildItem> rolesFromExtensions,
             List<KubernetesClusterRoleBuildItem> clusterRolesFromExtensions,
-            List<KubernetesServiceAccountBuildItem> serviceAccountsFromExtensions,
-            List<KubernetesRoleBindingBuildItem> roleBindingsFromExtensions) {
+            List<KubernetesEffectiveServiceAccountBuildItem> effectiveServiceAccounts,
+            List<KubernetesRoleBindingBuildItem> roleBindingsFromExtensions,
+            List<KubernetesClusterRoleBindingBuildItem> clusterRoleBindingsFromExtensions) {
         List<DecoratorBuildItem> result = new ArrayList<>();
         boolean kubernetesClientRequiresRbacGeneration = kubernetesClientConfiguration
                 .map(KubernetesClientCapabilityBuildItem::isGenerateRbac).orElse(false);
@@ -300,100 +301,61 @@ public class KubernetesCommonHelper {
         Set<String> clusterRoles = new HashSet<>();
 
         // Add roles from configuration
-        for (Map.Entry<String, RoleConfig> roleFromConfig : config.getRbacConfig().roles.entrySet()) {
-            RoleConfig role = roleFromConfig.getValue();
-            String roleName = role.name.orElse(roleFromConfig.getKey());
+        for (Map.Entry<String, RbacConfig.RoleConfig> roleFromConfig : config.rbac().roles().entrySet()) {
+            RbacConfig.RoleConfig role = roleFromConfig.getValue();
+            String roleName = role.name().orElse(roleFromConfig.getKey());
             result.add(new DecoratorBuildItem(target, new AddRoleResourceDecorator(name,
                     roleName,
-                    role.namespace.orElse(null),
-                    role.labels,
-                    toPolicyRulesList(role.policyRules))));
+                    role.namespace().orElse(null),
+                    role.labels(),
+                    toPolicyRulesList(role.policyRules()))));
 
             roles.add(roleName);
         }
 
         // Add roles from extensions
-        for (KubernetesRoleBuildItem role : rolesFromExtensions) {
-            if (role.getTarget() == null || role.getTarget().equals(target)) {
-                result.add(new DecoratorBuildItem(target, new AddRoleResourceDecorator(name,
+        Targetable.filteredByTarget(rolesFromExtensions, target)
+                .map(role -> new DecoratorBuildItem(target, new AddRoleResourceDecorator(name,
                         role.getName(),
                         role.getNamespace(),
                         Collections.emptyMap(),
-                        role.getRules()
-                                .stream()
-                                .map(it -> new PolicyRuleBuilder()
-                                        .withApiGroups(it.getApiGroups())
-                                        .withNonResourceURLs(it.getNonResourceURLs())
-                                        .withResourceNames(it.getResourceNames())
-                                        .withResources(it.getResources())
-                                        .withVerbs(it.getVerbs())
-                                        .build())
-                                .collect(Collectors.toList()))));
-            }
-        }
+                        role.getRules().stream()
+                                .map(RBACUtil::from)
+                                .toList())))
+                .forEach(result::add);
 
         // Add cluster roles from configuration
-        for (Map.Entry<String, ClusterRoleConfig> clusterRoleFromConfig : config.getRbacConfig().clusterRoles.entrySet()) {
-            ClusterRoleConfig clusterRole = clusterRoleFromConfig.getValue();
-            String clusterRoleName = clusterRole.name.orElse(clusterRoleFromConfig.getKey());
+        for (Map.Entry<String, RbacConfig.ClusterRoleConfig> clusterRoleFromConfig : config.rbac().clusterRoles().entrySet()) {
+            RbacConfig.ClusterRoleConfig clusterRole = clusterRoleFromConfig.getValue();
+            String clusterRoleName = clusterRole.name().orElse(clusterRoleFromConfig.getKey());
             result.add(new DecoratorBuildItem(target, new AddClusterRoleResourceDecorator(name,
                     clusterRoleName,
-                    clusterRole.labels,
-                    toPolicyRulesList(clusterRole.policyRules))));
+                    clusterRole.labels(),
+                    toPolicyRulesList(clusterRole.policyRules()))));
             clusterRoles.add(clusterRoleName);
         }
 
         // Add cluster roles from extensions
-        for (KubernetesClusterRoleBuildItem role : clusterRolesFromExtensions) {
-            if (role.getTarget() == null || role.getTarget().equals(target)) {
-                result.add(new DecoratorBuildItem(target, new AddClusterRoleResourceDecorator(name,
+        Targetable.filteredByTarget(clusterRolesFromExtensions, target)
+                .map(role -> new DecoratorBuildItem(target, new AddClusterRoleResourceDecorator(name,
                         role.getName(),
                         Collections.emptyMap(),
-                        role.getRules()
-                                .stream()
-                                .map(it -> new PolicyRuleBuilder()
-                                        .withApiGroups(it.getApiGroups())
-                                        .withNonResourceURLs(it.getNonResourceURLs())
-                                        .withResourceNames(it.getResourceNames())
-                                        .withResources(it.getResources())
-                                        .withVerbs(it.getVerbs())
-                                        .build())
-                                .collect(Collectors.toList()))));
-            }
+                        role.getRules().stream()
+                                .map(RBACUtil::from)
+                                .toList())))
+                .forEach(result::add);
+
+        // Retrieve SA for current target
+        final var potentialSAs = Targetable.filteredByTarget(effectiveServiceAccounts, target).toList();
+        if (potentialSAs.isEmpty()) {
+            throw new RuntimeException("No effective service account found for application " + name);
         }
-
-        Optional<String> effectiveServiceAccount = Optional.empty();
-        String effectiveServiceAccountNamespace = null;
-        for (KubernetesServiceAccountBuildItem sa : serviceAccountsFromExtensions) {
-            String saName = Optional.ofNullable(sa.getName()).orElse(name);
-            result.add(new DecoratorBuildItem(target, new AddServiceAccountResourceDecorator(name, saName,
-                    sa.getNamespace(),
-                    sa.getLabels())));
-
-            if (sa.isUseAsDefault() || effectiveServiceAccount.isEmpty()) {
-                effectiveServiceAccount = Optional.of(saName);
-                effectiveServiceAccountNamespace = sa.getNamespace();
-            }
+        if (potentialSAs.size() > 1) {
+            throw new RuntimeException("More than one effective service account found for application " + name);
         }
-
-        // Add service account from configuration
-        for (Map.Entry<String, ServiceAccountConfig> sa : config.getRbacConfig().serviceAccounts.entrySet()) {
-            String saName = sa.getValue().name.orElse(sa.getKey());
-            result.add(new DecoratorBuildItem(target, new AddServiceAccountResourceDecorator(name, saName,
-                    sa.getValue().namespace.orElse(null),
-                    sa.getValue().labels)));
-
-            if (sa.getValue().isUseAsDefault() || effectiveServiceAccount.isEmpty()) {
-                effectiveServiceAccount = Optional.of(saName);
-                effectiveServiceAccountNamespace = sa.getValue().namespace.orElse(null);
-            }
-        }
-
-        // The user provided service account should always take precedence
-        if (config.getServiceAccount().isPresent()) {
-            effectiveServiceAccount = config.getServiceAccount();
-            effectiveServiceAccountNamespace = null;
-        }
+        final var effectiveServiceAccount = potentialSAs.get(0);
+        final var effectiveServiceAccountNamespace = effectiveServiceAccount.getNamespace();
+        final var effectiveServiceAccountName = effectiveServiceAccount.getServiceAccountName();
 
         // Prepare default configuration
         String defaultRoleName = null;
@@ -409,88 +371,98 @@ public class KubernetesCommonHelper {
         }
 
         // Add role bindings from extensions
-        for (KubernetesRoleBindingBuildItem rb : roleBindingsFromExtensions) {
-            if (rb.getTarget() == null || rb.getTarget().equals(target)) {
-                result.add(new DecoratorBuildItem(target, new AddRoleBindingResourceDecorator(name,
+        Targetable.filteredByTarget(roleBindingsFromExtensions, target)
+                .map(rb -> new DecoratorBuildItem(target, new AddRoleBindingResourceDecorator(name,
                         Strings.isNotNullOrEmpty(rb.getName()) ? rb.getName() : name + "-" + rb.getRoleRef().getName(),
+                        rb.getNamespace(),
                         rb.getLabels(),
                         rb.getRoleRef(),
-                        rb.getSubjects())));
-            }
-        }
+                        rb.getSubjects())))
+                .forEach(result::add);
 
         // Add role bindings from configuration
-        for (Map.Entry<String, RoleBindingConfig> rb : config.getRbacConfig().roleBindings.entrySet()) {
-            String rbName = rb.getValue().name.orElse(rb.getKey());
-            RoleBindingConfig roleBinding = rb.getValue();
+        for (Map.Entry<String, RbacConfig.RoleBindingConfig> rb : config.rbac().roleBindings().entrySet()) {
+            String rbName = rb.getValue().name().orElse(rb.getKey());
+            RbacConfig.RoleBindingConfig roleBinding = rb.getValue();
 
             List<Subject> subjects = new ArrayList<>();
-            if (roleBinding.subjects.isEmpty()) {
+            if (roleBinding.subjects().isEmpty()) {
                 requiresServiceAccount = true;
                 subjects.add(new Subject(null, SERVICE_ACCOUNT,
-                        effectiveServiceAccount.orElse(name),
+                        effectiveServiceAccountName,
                         effectiveServiceAccountNamespace));
             } else {
-                for (Map.Entry<String, SubjectConfig> s : roleBinding.subjects.entrySet()) {
-                    String subjectName = s.getValue().name.orElse(s.getKey());
-                    SubjectConfig subject = s.getValue();
-                    subjects.add(new Subject(subject.apiGroup.orElse(null),
-                            subject.kind,
+                for (Map.Entry<String, RbacConfig.SubjectConfig> s : roleBinding.subjects().entrySet()) {
+                    String subjectName = s.getValue().name().orElse(s.getKey());
+                    RbacConfig.SubjectConfig subject = s.getValue();
+                    subjects.add(new Subject(subject.apiGroup().orElse(null),
+                            subject.kind(),
                             subjectName,
-                            subject.namespace.orElse(null)));
+                            subject.namespace().orElse(null)));
                 }
             }
 
-            String roleName = roleBinding.roleName.orElse(defaultRoleName);
+            String roleName = roleBinding.roleName().orElse(defaultRoleName);
             if (roleName == null) {
                 throw new IllegalStateException("No role has been set in the RoleBinding resource!");
             }
 
-            boolean clusterWide = roleBinding.clusterWide.orElse(defaultClusterWide);
+            boolean clusterWide = roleBinding.clusterWide().orElse(defaultClusterWide);
             result.add(new DecoratorBuildItem(target, new AddRoleBindingResourceDecorator(name,
                     rbName,
-                    roleBinding.labels,
+                    null, // todo: should namespace be providable via config?
+                    roleBinding.labels(),
                     new RoleRef(roleName, clusterWide),
                     subjects.toArray(new Subject[0]))));
         }
 
+        // Add cluster role bindings from extensions
+        Targetable.filteredByTarget(clusterRoleBindingsFromExtensions, target)
+                .map(rb -> new DecoratorBuildItem(target, new AddClusterRoleBindingResourceDecorator(name,
+                        Strings.isNotNullOrEmpty(rb.getName()) ? rb.getName() : name + "-" + rb.getRoleRef().getName(),
+                        rb.getLabels(),
+                        rb.getRoleRef(),
+                        rb.getSubjects())))
+                .forEach(result::add);
+
         // Add cluster role bindings from configuration
-        for (Map.Entry<String, ClusterRoleBindingConfig> rb : config.getRbacConfig().clusterRoleBindings.entrySet()) {
-            String rbName = rb.getValue().name.orElse(rb.getKey());
-            ClusterRoleBindingConfig clusterRoleBinding = rb.getValue();
+        for (Map.Entry<String, RbacConfig.ClusterRoleBindingConfig> rb : config.rbac().clusterRoleBindings().entrySet()) {
+            String rbName = rb.getValue().name().orElse(rb.getKey());
+            RbacConfig.ClusterRoleBindingConfig clusterRoleBinding = rb.getValue();
 
             List<Subject> subjects = new ArrayList<>();
-            if (clusterRoleBinding.subjects.isEmpty()) {
+            if (clusterRoleBinding.subjects().isEmpty()) {
                 throw new IllegalStateException("No subjects have been set in the ClusterRoleBinding resource!");
             }
 
-            for (Map.Entry<String, SubjectConfig> s : clusterRoleBinding.subjects.entrySet()) {
-                String subjectName = s.getValue().name.orElse(s.getKey());
-                SubjectConfig subject = s.getValue();
-                subjects.add(new Subject(subject.apiGroup.orElse(null),
-                        subject.kind,
+            for (Map.Entry<String, RbacConfig.SubjectConfig> s : clusterRoleBinding.subjects().entrySet()) {
+                String subjectName = s.getValue().name().orElse(s.getKey());
+                RbacConfig.SubjectConfig subject = s.getValue();
+                subjects.add(new Subject(subject.apiGroup().orElse(null),
+                        subject.kind(),
                         subjectName,
-                        subject.namespace.orElse(null)));
+                        subject.namespace().orElse(null)));
             }
 
             result.add(new DecoratorBuildItem(target, new AddClusterRoleBindingResourceDecorator(name,
                     rbName,
-                    clusterRoleBinding.labels,
-                    new RoleRef(clusterRoleBinding.roleName, true),
+                    clusterRoleBinding.labels(),
+                    new RoleRef(clusterRoleBinding.roleName(), true),
                     subjects.toArray(new Subject[0]))));
         }
 
         // if no role bindings were created, then automatically create one if:
-        if (config.getRbacConfig().roleBindings.isEmpty()) {
+        if (config.rbac().roleBindings().isEmpty()) {
             if (defaultRoleName != null) {
                 // generate a default role binding if a default role name was configured
                 requiresServiceAccount = true;
                 result.add(new DecoratorBuildItem(target, new AddRoleBindingResourceDecorator(name,
                         name,
+                        null, // todo: should namespace be providable via config?
                         Collections.emptyMap(),
                         new RoleRef(defaultRoleName, defaultClusterWide),
                         new Subject(null, SERVICE_ACCOUNT,
-                                effectiveServiceAccount.orElse(name),
+                                effectiveServiceAccountName,
                                 effectiveServiceAccountNamespace))));
             } else if (kubernetesClientRequiresRbacGeneration) {
                 // the property `quarkus.kubernetes-client.generate-rbac` is enabled
@@ -498,10 +470,11 @@ public class KubernetesCommonHelper {
                 requiresServiceAccount = true;
                 result.add(new DecoratorBuildItem(target, new AddRoleBindingResourceDecorator(name,
                         name + "-" + DEFAULT_ROLE_NAME_VIEW,
+                        null, // todo: should namespace be providable via config?
                         Collections.emptyMap(),
                         new RoleRef(DEFAULT_ROLE_NAME_VIEW, true),
                         new Subject(null, SERVICE_ACCOUNT,
-                                effectiveServiceAccount.orElse(name),
+                                effectiveServiceAccountName,
                                 effectiveServiceAccountNamespace))));
             }
         }
@@ -510,22 +483,62 @@ public class KubernetesCommonHelper {
         if (requiresServiceAccount) {
             // and generate the resource
             result.add(new DecoratorBuildItem(target,
-                    new AddServiceAccountResourceDecorator(name, effectiveServiceAccount.orElse(name),
+                    new AddServiceAccountResourceDecorator(name, effectiveServiceAccountName,
                             effectiveServiceAccountNamespace,
                             Collections.emptyMap())));
         }
 
         // set service account in deployment resource if the user sets a service account,
         // or it's required for a dependant resource.
-        if (effectiveServiceAccount.isPresent() || requiresServiceAccount) {
-            result.add(new DecoratorBuildItem(target,
-                    new ApplyServiceAccountNameDecorator(name, effectiveServiceAccount.orElse(name))));
+        if (effectiveServiceAccount.wasSet() || requiresServiceAccount) {
+            result.add(new DecoratorBuildItem(target, new ApplyServiceAccountNameDecorator(name, effectiveServiceAccountName)));
         }
 
         return result;
     }
 
-    private static Collection<DecoratorBuildItem> createLabelDecorators(Optional<Project> project, String target, String name,
+    public static KubernetesEffectiveServiceAccountBuildItem computeEffectiveServiceAccount(String name, String target,
+            PlatformConfiguration config, List<KubernetesServiceAccountBuildItem> serviceAccountsFromExtensions,
+            BuildProducer<DecoratorBuildItem> decorators) {
+        Optional<String> effectiveServiceAccount = Optional.empty();
+        String effectiveServiceAccountNamespace = null;
+        for (KubernetesServiceAccountBuildItem sa : serviceAccountsFromExtensions) {
+            String saName = Optional.ofNullable(sa.getName()).orElse(name);
+            decorators.produce(new DecoratorBuildItem(target, new AddServiceAccountResourceDecorator(name, saName,
+                    sa.getNamespace(),
+                    sa.getLabels())));
+
+            if (sa.isUseAsDefault() || effectiveServiceAccount.isEmpty()) {
+                effectiveServiceAccount = Optional.of(saName);
+                effectiveServiceAccountNamespace = sa.getNamespace();
+            }
+        }
+
+        // Add service account from configuration
+        for (Map.Entry<String, RbacConfig.ServiceAccountConfig> sa : config.rbac().serviceAccounts().entrySet()) {
+            String saName = sa.getValue().name().orElse(sa.getKey());
+            decorators.produce(new DecoratorBuildItem(target, new AddServiceAccountResourceDecorator(name, saName,
+                    sa.getValue().namespace().orElse(null),
+                    sa.getValue().labels())));
+
+            if (sa.getValue().isUseAsDefault() || effectiveServiceAccount.isEmpty()) {
+                effectiveServiceAccount = Optional.of(saName);
+                effectiveServiceAccountNamespace = sa.getValue().namespace().orElse(null);
+            }
+        }
+
+        // The user provided service account should always take precedence
+        if (config.serviceAccount().isPresent()) {
+            effectiveServiceAccount = config.serviceAccount();
+            effectiveServiceAccountNamespace = null;
+        }
+
+        final var effectiveName = effectiveServiceAccount.orElse(name);
+        return new KubernetesEffectiveServiceAccountBuildItem(effectiveName, effectiveServiceAccountNamespace,
+                effectiveServiceAccount.isPresent(), target);
+    }
+
+    private static Collection<DecoratorBuildItem> createLabelDecorators(String target, String name,
             PlatformConfiguration config, List<KubernetesLabelBuildItem> labels) {
 
         List<DecoratorBuildItem> result = new ArrayList<>();
@@ -533,21 +546,19 @@ public class KubernetesCommonHelper {
         result.add(new DecoratorBuildItem(target, new AddMetadataToTemplateDecorator()));
         result.add(new DecoratorBuildItem(target, new AddSelectorToDeploymentSpecDecorator()));
 
-        labels.forEach(l -> {
-            result.add(new DecoratorBuildItem(l.getTarget(),
-                    new AddLabelDecorator(name, l.getKey(), l.getValue())));
-        });
+        labels.forEach(l -> result.add(new DecoratorBuildItem(l.getTarget(),
+                new AddLabelDecorator(name, l.getKey(), l.getValue()))));
 
-        if (!config.isAddVersionToLabelSelectors() || config.isIdempotent()) {
+        if (!config.addVersionToLabelSelectors() || config.idempotent()) {
             result.add(new DecoratorBuildItem(target, new RemoveFromSelectorDecorator(name, Labels.VERSION)));
             result.add(new DecoratorBuildItem(target, new RemoveFromMatchingLabelsDecorator(name, Labels.VERSION)));
         }
 
-        if (config.isIdempotent()) {
+        if (config.idempotent()) {
             result.add(new DecoratorBuildItem(target, new RemoveLabelDecorator(name, Labels.VERSION)));
         }
 
-        if (!config.isAddNameToLabelSelectors()) {
+        if (!config.addNameToLabelSelectors()) {
             result.add(new DecoratorBuildItem(target, new RemoveLabelDecorator(name, Labels.NAME)));
             result.add(new DecoratorBuildItem(target, new RemoveFromSelectorDecorator(name, Labels.NAME)));
             result.add(new DecoratorBuildItem(target, new RemoveFromMatchingLabelsDecorator(name, Labels.NAME)));
@@ -565,13 +576,13 @@ public class KubernetesCommonHelper {
      * @param config The {@link PlatformConfiguration} instance
      * @param command Optional command item from other extensions
      */
-    private static List<DecoratorBuildItem> createCommandDecorator(Optional<Project> project, String target, String name,
+    private static List<DecoratorBuildItem> createCommandDecorator(String target, String name,
             PlatformConfiguration config, Optional<KubernetesCommandBuildItem> command) {
         List<DecoratorBuildItem> result = new ArrayList<>();
-        if (config.getCommand().isPresent()) {
+        if (config.command().isPresent()) {
             // If command has been set in configuration, we use it
             result.add(new DecoratorBuildItem(target,
-                    new ApplyCommandDecorator(name, config.getCommand().get().toArray(new String[0]))));
+                    new ApplyCommandDecorator(name, config.command().get().toArray(new String[0]))));
         } else if (command.isPresent()) {
             // If not, we use the command that has been provided in other extensions (if any).
             result.add(new DecoratorBuildItem(target,
@@ -590,22 +601,22 @@ public class KubernetesCommonHelper {
      * @param config The {@link PlatformConfiguration} instance
      * @param command Optional command item from other extensions
      */
-    private static List<DecoratorBuildItem> createArgsDecorator(Optional<Project> project, String target, String name,
+    private static List<DecoratorBuildItem> createArgsDecorator(String target, String name,
             PlatformConfiguration config, Optional<KubernetesCommandBuildItem> command) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
         List<String> args = new ArrayList<>();
         command.ifPresent(cmd -> args.addAll(cmd.getArgs()));
-        config.getArguments().ifPresent(args::addAll);
+        config.arguments().ifPresent(args::addAll);
 
         if (!args.isEmpty()) {
-            result.add(new DecoratorBuildItem(target, new ApplyArgsDecorator(name, args.toArray(new String[args.size()]))));
+            result.add(new DecoratorBuildItem(target, new ApplyArgsDecorator(name, args.toArray(new String[0]))));
         }
 
         return result;
     }
 
-    public static List<DecoratorBuildItem> createInitContainerDecorators(String target, String name,
+    public static List<DecoratorBuildItem> createInitContainerDecorators(String target, String applicationName,
             List<KubernetesInitContainerBuildItem> items, List<DecoratorBuildItem> decorators) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
@@ -614,26 +625,27 @@ public class KubernetesCommonHelper {
                 .map(d -> d.getDecorator(AddEnvVarDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         List<AddMountDecorator> mountDecorators = decorators.stream()
                 .filter(d -> d.getGroup() == null || d.getGroup().equals(target))
                 .map(d -> d.getDecorator(AddMountDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         items.stream().filter(item -> item.getTarget() == null || item.getTarget().equals(target)).forEach(item -> {
             io.dekorate.kubernetes.config.ContainerBuilder containerBuilder = new io.dekorate.kubernetes.config.ContainerBuilder()
                     .withName(item.getName())
                     .withImage(item.getImage())
-                    .withCommand(item.getCommand().toArray(new String[item.getCommand().size()]))
-                    .withArguments(item.getArguments().toArray(new String[item.getArguments().size()]));
+                    .withImagePullPolicy(ImagePullPolicy.valueOf(item.getImagePullPolicy()))
+                    .withCommand(item.getCommand().toArray(new String[0]))
+                    .withArguments(item.getArguments().toArray(new String[0]));
 
             if (item.isSharedEnvironment()) {
                 for (final AddEnvVarDecorator delegate : envVarDecorators) {
                     result.add(new DecoratorBuildItem(target,
-                            new ApplicationContainerDecorator<ContainerBuilder>(name, item.getName()) {
+                            new ApplicationContainerDecorator<ContainerBuilder>(applicationName, item.getName()) {
                                 @Override
                                 public void andThenVisit(ContainerBuilder builder) {
                                     delegate.andThenVisit(builder);
@@ -666,7 +678,7 @@ public class KubernetesCommonHelper {
             }
 
             result.add(new DecoratorBuildItem(target,
-                    new AddInitContainerDecorator(name, containerBuilder
+                    new AddInitContainerDecorator(applicationName, containerBuilder
                             .addAllToEnvVars(item.getEnvVars().entrySet().stream().map(e -> new EnvBuilder()
                                     .withName(e.getKey())
                                     .withValue(e.getValue())
@@ -676,8 +688,8 @@ public class KubernetesCommonHelper {
         return result;
     }
 
-    public static List<DecoratorBuildItem> createInitJobDecorators(String target, String name,
-            List<KubernetesJobBuildItem> items, List<DecoratorBuildItem> decorators) {
+    public static List<DecoratorBuildItem> createInitJobDecorators(String target,
+            String applicationName, List<KubernetesJobBuildItem> items, List<DecoratorBuildItem> decorators) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
         List<AddEnvVarDecorator> envVarDecorators = decorators.stream()
@@ -685,13 +697,12 @@ public class KubernetesCommonHelper {
                 .map(d -> d.getDecorator(AddEnvVarDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         List<NamedResourceDecorator<?>> volumeDecorators = decorators.stream()
                 .filter(d -> d.getGroup() == null || d.getGroup().equals(target))
                 .filter(d -> d.getDecorator() instanceof AddEmptyDirVolumeDecorator
                         || d.getDecorator() instanceof AddSecretVolumeDecorator
-                        || d.getDecorator() instanceof AddEmptyDirVolumeDecorator
                         || d.getDecorator() instanceof AddAzureDiskVolumeDecorator
                         || d.getDecorator() instanceof AddAzureFileVolumeDecorator
                         || d.getDecorator() instanceof AddAwsElasticBlockStoreVolumeDecorator)
@@ -703,21 +714,21 @@ public class KubernetesCommonHelper {
                 .map(d -> d.getDecorator(AddMountDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         List<AddImagePullSecretDecorator> imagePullSecretDecorators = decorators.stream()
                 .filter(d -> d.getGroup() == null || d.getGroup().equals(target))
                 .map(d -> d.getDecorator(AddImagePullSecretDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         List<ApplyServiceAccountNameDecorator> serviceAccountDecorators = decorators.stream()
                 .filter(d -> d.getGroup() == null || d.getGroup().equals(target))
                 .map(d -> d.getDecorator(ApplyServiceAccountNameDecorator.class))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
-                .collect(Collectors.toList());
+                .toList();
 
         items.stream().filter(item -> item.getTarget() == null || item.getTarget().equals(target)).forEach(item -> {
 
@@ -810,19 +821,20 @@ public class KubernetesCommonHelper {
      *
      * @param target The deployment target (e.g. kubernetes, openshift, knative)
      * @param name The name of the resource to accept the configuration
+     *        param namespace The optional namespace to apply to the resource
      * @param config The {@link PlatformConfiguration} instance
      */
-    private static List<DecoratorBuildItem> createContainerDecorators(Optional<Project> project, String target, String name,
+    private static List<DecoratorBuildItem> createContainerDecorators(String target, String name,
+            Optional<KubernetesNamespaceBuildItem> namespace,
             PlatformConfiguration config) {
         List<DecoratorBuildItem> result = new ArrayList<>();
-        if (config.getNamespace().isPresent()) {
-            result.add(new DecoratorBuildItem(target, new AddNamespaceDecorator(config.getNamespace().get())));
-            result.add(new DecoratorBuildItem(target, new AddNamespaceToSubjectDecorator(config.getNamespace().get())));
-        }
-
-        config.getWorkingDir().ifPresent(w -> {
-            result.add(new DecoratorBuildItem(target, new ApplyWorkingDirDecorator(name, w)));
+        namespace.ifPresent(n -> {
+            result.add(new DecoratorBuildItem(target, new AddNamespaceDecorator(n.getNamespace())));
+            result.add(new DecoratorBuildItem(target, new AddNamespaceToSubjectDecorator(n.getNamespace())));
         });
+
+        config.workingDir()
+                .ifPresent(w -> result.add(new DecoratorBuildItem(target, new ApplyWorkingDirDecorator(name, w))));
 
         return result;
     }
@@ -834,56 +846,52 @@ public class KubernetesCommonHelper {
      * @param name The name of the resource to accept the configuration
      * @param config The {@link PlatformConfiguration} instance
      */
-    private static List<DecoratorBuildItem> createPodDecorators(Optional<Project> project, String target, String name,
+    private static List<DecoratorBuildItem> createPodDecorators(String target, String name,
             PlatformConfiguration config) {
         List<DecoratorBuildItem> result = new ArrayList<>();
-        config.getImagePullSecrets().ifPresent(l -> {
-            l.forEach(s -> result.add(new DecoratorBuildItem(target, new AddImagePullSecretDecorator(name, s))));
-        });
+        config.imagePullSecrets().ifPresent(
+                l -> l.forEach(s -> result.add(new DecoratorBuildItem(target, new AddImagePullSecretDecorator(name, s)))));
 
-        config.getHostAliases().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddHostAliasesDecorator(name, HostAliasConverter.convert(e))));
-        });
+        config.hostAliases().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddHostAliasesDecorator(name, HostAliasConverter.convert(e)))));
 
-        config.getInitContainers().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddInitContainerDecorator(name, ContainerConverter.convert(e))));
-        });
+        config.nodeSelector()
+                .ifPresent(n -> result.add(
+                        new DecoratorBuildItem(target, new AddNodeSelectorDecorator(name, n.key(), n.value()))));
 
-        config.getSidecars().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddSidecarDecorator(name, ContainerConverter.convert(e))));
-        });
+        config.initContainers().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddInitContainerDecorator(name, ContainerConverter.convert(e)))));
 
-        config.getResources().limits.cpu.ifPresent(c -> {
-            result.add(new DecoratorBuildItem(target, new ApplyLimitsCpuDecorator(name, c)));
-        });
+        config.getSidecars().entrySet().forEach(
+                e -> result.add(new DecoratorBuildItem(target, new AddSidecarDecorator(name, ContainerConverter.convert(e)))));
 
-        config.getResources().limits.memory.ifPresent(m -> {
-            result.add(new DecoratorBuildItem(target, new ApplyLimitsMemoryDecorator(name, m)));
-        });
+        config.resources().limits().cpu()
+                .ifPresent(c -> result.add(new DecoratorBuildItem(target, new ApplyLimitsCpuDecorator(name, c))));
 
-        config.getResources().requests.cpu.ifPresent(c -> {
-            result.add(new DecoratorBuildItem(target, new ApplyRequestsCpuDecorator(name, c)));
-        });
+        config.resources().limits().memory()
+                .ifPresent(m -> result.add(new DecoratorBuildItem(target, new ApplyLimitsMemoryDecorator(name, m))));
 
-        config.getResources().requests.memory.ifPresent(m -> {
-            result.add(new DecoratorBuildItem(target, new ApplyRequestsMemoryDecorator(name, m)));
-        });
+        config.resources().requests().cpu()
+                .ifPresent(c -> result.add(new DecoratorBuildItem(target, new ApplyRequestsCpuDecorator(name, c))));
 
-        if (config.getSecurityContext().isAnyPropertySet()) {
-            result.add(new DecoratorBuildItem(target, new ApplySecuritySettingsDecorator(name, config.getSecurityContext())));
+        config.resources().requests().memory()
+                .ifPresent(m -> result.add(new DecoratorBuildItem(target, new ApplyRequestsMemoryDecorator(name, m))));
+
+        if (config.securityContext().isAnyPropertySet()) {
+            result.add(new DecoratorBuildItem(target, new ApplySecuritySettingsDecorator(name, config.securityContext())));
         }
 
         return result;
     }
 
-    private static List<DecoratorBuildItem> createAppConfigVolumeAndEnvDecorators(Optional<Project> project, String target,
+    private static List<DecoratorBuildItem> createAppConfigVolumeAndEnvDecorators(String target,
             String name,
             PlatformConfiguration config) {
 
         List<DecoratorBuildItem> result = new ArrayList<>();
         Set<String> paths = new HashSet<>();
 
-        config.getAppSecret().ifPresent(s -> {
+        config.appSecret().ifPresent(s -> {
             result.add(new DecoratorBuildItem(target, new AddSecretVolumeDecorator(new SecretVolumeBuilder()
                     .withSecretName(s)
                     .withVolumeName("app-secret")
@@ -895,7 +903,7 @@ public class KubernetesCommonHelper {
             paths.add("/mnt/app-secret");
         });
 
-        config.getAppConfigMap().ifPresent(s -> {
+        config.appConfigMap().ifPresent(s -> {
             result.add(new DecoratorBuildItem(target, new AddConfigMapVolumeDecorator(new ConfigMapVolumeBuilder()
                     .withConfigMapName(s)
                     .withVolumeName("app-config-map")
@@ -911,49 +919,40 @@ public class KubernetesCommonHelper {
             result.add(new DecoratorBuildItem(target,
                     new AddEnvVarDecorator(ApplicationContainerDecorator.ANY, name, new EnvBuilder()
                             .withName("SMALLRYE_CONFIG_LOCATIONS")
-                            .withValue(paths.stream().collect(Collectors.joining(",")))
+                            .withValue(String.join(",", paths))
                             .build())));
         }
         return result;
     }
 
-    private static List<DecoratorBuildItem> createMountAndVolumeDecorators(Optional<Project> project, String target,
+    private static List<DecoratorBuildItem> createMountAndVolumeDecorators(String target,
             String name,
             PlatformConfiguration config) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
-        config.getMounts().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddMountDecorator(ANY, name, MountConverter.convert(e))));
-        });
+        config.mounts().entrySet().forEach(
+                e -> result.add(new DecoratorBuildItem(target, new AddMountDecorator(ANY, name, MountConverter.convert(e)))));
 
-        config.getSecretVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddSecretVolumeDecorator(SecretVolumeConverter.convert(e))));
-        });
+        config.secretVolumes().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddSecretVolumeDecorator(SecretVolumeConverter.convert(e)))));
 
-        config.getConfigMapVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddConfigMapVolumeDecorator(ConfigMapVolumeConverter.convert(e))));
-        });
+        config.configMapVolumes().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddConfigMapVolumeDecorator(ConfigMapVolumeConverter.convert(e)))));
 
-        config.getEmptyDirVolumes().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddEmptyDirVolumeDecorator(EmptyDirVolumeConverter.convert(e))));
-        });
+        config.emptyDirVolumes().ifPresent(volumes -> volumes.forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddEmptyDirVolumeDecorator(EmptyDirVolumeConverter.convert(e))))));
 
-        config.getPvcVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddPvcVolumeDecorator(PvcVolumeConverter.convert(e))));
-        });
+        config.pvcVolumes().entrySet().forEach(
+                e -> result.add(new DecoratorBuildItem(target, new AddPvcVolumeDecorator(PvcVolumeConverter.convert(e)))));
 
-        config.getAwsElasticBlockStoreVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target,
-                    new AddAwsElasticBlockStoreVolumeDecorator(AwsElasticBlockStoreVolumeConverter.convert(e))));
-        });
+        config.awsElasticBlockStoreVolumes().entrySet().forEach(e -> result.add(new DecoratorBuildItem(target,
+                new AddAwsElasticBlockStoreVolumeDecorator(AwsElasticBlockStoreVolumeConverter.convert(e)))));
 
-        config.getAzureFileVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddAzureFileVolumeDecorator(AzureFileVolumeConverter.convert(e))));
-        });
+        config.azureFileVolumes().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddAzureFileVolumeDecorator(AzureFileVolumeConverter.convert(e)))));
 
-        config.getAzureDiskVolumes().entrySet().forEach(e -> {
-            result.add(new DecoratorBuildItem(target, new AddAzureDiskVolumeDecorator(AzureDiskVolumeConverter.convert(e))));
-        });
+        config.azureDiskVolumes().entrySet().forEach(e -> result
+                .add(new DecoratorBuildItem(target, new AddAzureDiskVolumeDecorator(AzureDiskVolumeConverter.convert(e)))));
         return result;
     }
 
@@ -964,16 +963,14 @@ public class KubernetesCommonHelper {
             Optional<Port> port) {
         List<DecoratorBuildItem> result = new ArrayList<>();
 
-        annotations.forEach(a -> {
-            result.add(new DecoratorBuildItem(a.getTarget(),
-                    new AddAnnotationDecorator(name, a.getKey(), a.getValue())));
-        });
+        annotations.forEach(a -> result.add(new DecoratorBuildItem(a.getTarget(),
+                new AddAnnotationDecorator(name, a.getKey(), a.getValue()))));
 
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
 
         project.ifPresent(p -> {
             ScmInfo scm = p.getScmInfo();
-            String vcsUrl = scm != null ? scm.getRemote().get("origin") : null;
+            String vcsUri = parseVCSUri(config.vcsUri(), scm);
             String commitId = scm != null ? scm.getCommit() : null;
 
             // Dekorate uses its own annotations. Let's replace them with the quarkus ones.
@@ -983,19 +980,19 @@ public class KubernetesCommonHelper {
             result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
                     new Annotation(QUARKUS_ANNOTATIONS_QUARKUS_VERSION, Version.getVersion(), new String[0]))));
             //Add quarkus vcs annotations
-            if (commitId != null && !config.isIdempotent()) {
+            if (commitId != null && !config.idempotent()) {
                 result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
                         new Annotation(QUARKUS_ANNOTATIONS_COMMIT_ID, commitId, new String[0]))));
             }
-            if (vcsUrl != null) {
+            if (vcsUri != null) {
                 result.add(new DecoratorBuildItem(target,
                         new AddAnnotationDecorator(name,
-                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, Git.sanitizeRemoteUrl(vcsUrl), new String[0]))));
+                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUri, new String[0]))));
             }
 
         });
 
-        if (config.isAddBuildTimestamp() && !config.isIdempotent()) {
+        if (config.addBuildTimestamp() && !config.idempotent()) {
             result.add(new DecoratorBuildItem(target,
                     new AddAnnotationDecorator(name, new Annotation(QUARKUS_ANNOTATIONS_BUILD_TIMESTAMP,
                             now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd - HH:mm:ss Z")), new String[0]))));
@@ -1004,28 +1001,33 @@ public class KubernetesCommonHelper {
         // Add metrics annotations
         metricsConfiguration.ifPresent(m -> {
             String path = m.metricsEndpoint();
-            String prefix = config.getPrometheusConfig().prefix;
+            String prefix = config.prometheus().prefix();
             if (port.isPresent() && path != null) {
-                if (config.getPrometheusConfig().generateServiceMonitor) {
+                if (config.prometheus().generateServiceMonitor()) {
                     result.add(new DecoratorBuildItem(target, new AddServiceMonitorResourceDecorator(
-                            config.getPrometheusConfig().scheme.orElse("http"),
-                            config.getPrometheusConfig().port.orElse(String.valueOf(port.get().getContainerPort())),
-                            config.getPrometheusConfig().path.orElse(path),
+                            config.prometheus().scheme().orElse("http"),
+                            config.prometheus().port().orElse(String.valueOf(port.get().getContainerPort())),
+                            config.prometheus().path().orElse(path),
                             10,
                             true)));
                 }
 
-                if (config.getPrometheusConfig().annotations) {
+                if (config.prometheus().annotations()) {
                     result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
-                            config.getPrometheusConfig().scrape.orElse(prefix + "/scrape"), "true",
+                            config.prometheus().scrape().orElse(prefix + "/scrape"), "true",
                             PROMETHEUS_ANNOTATION_TARGETS)));
                     result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
-                            config.getPrometheusConfig().path.orElse(prefix + "/path"), path, PROMETHEUS_ANNOTATION_TARGETS)));
+                            config.prometheus().path().orElse(prefix + "/path"), path, PROMETHEUS_ANNOTATION_TARGETS)));
+
+                    final var managementPort = ConfigProvider.getConfig()
+                            .getOptionalValue("quarkus.management.port", Integer.class).orElse(9000);
+                    final var prometheusPort = KubernetesConfigUtil.managementPortIsEnabled() ? managementPort
+                            : port.get().getContainerPort();
                     result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
-                            config.getPrometheusConfig().port.orElse(prefix + "/port"), "" + port.get().getContainerPort(),
+                            config.prometheus().port().orElse(prefix + "/port"), "" + prometheusPort,
                             PROMETHEUS_ANNOTATION_TARGETS)));
                     result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
-                            config.getPrometheusConfig().scheme.orElse(prefix + "/scheme"), "http",
+                            config.prometheus().scheme().orElse(prefix + "/scheme"), "http",
                             PROMETHEUS_ANNOTATION_TARGETS)));
                 }
             }
@@ -1047,7 +1049,7 @@ public class KubernetesCommonHelper {
      * @param target The deployment target
      * @param probeKind The probe kind (e.g. readinessProbe, livenessProbe etc)
      * @param portName the probe port name build item
-     * @paramt ports a list of kubernetes port build items
+     * @param ports a list of kubernetes port build items
      * @return a decorator for configures the port of the http action of the probe.
      */
     public static DecoratorBuildItem createProbeHttpPortDecorator(String name, String target, String probeKind,
@@ -1059,16 +1061,16 @@ public class KubernetesCommonHelper {
         //1. check if `httpActionPort` is defined
         //2. lookup port by `httpPortName`
         //3. fallback to DEFAULT_HTTP_PORT
-        String httpPortName = probeConfig.httpActionPortName
+        String httpPortName = probeConfig.httpActionPortName()
                 .or(() -> portName.map(KubernetesProbePortNameBuildItem::getName))
                 .orElse(HTTP_PORT);
 
         Integer port;
         PortConfig portFromConfig = portsFromConfig.get(httpPortName);
-        if (probeConfig.httpActionPort.isPresent()) {
-            port = probeConfig.httpActionPort.get();
-        } else if (portFromConfig != null && portFromConfig.containerPort.isPresent()) {
-            port = portFromConfig.containerPort.getAsInt();
+        if (probeConfig.httpActionPort().isPresent()) {
+            port = probeConfig.httpActionPort().get();
+        } else if (portFromConfig != null && portFromConfig.containerPort().isPresent()) {
+            port = portFromConfig.containerPort().getAsInt();
         } else {
             port = ports.stream().filter(p -> httpPortName.equals(p.getName()))
                     .map(KubernetesPortBuildItem::getPort).findFirst().orElse(DEFAULT_HTTP_PORT);
@@ -1076,10 +1078,10 @@ public class KubernetesCommonHelper {
 
         // Resolve scheme property from:
         String scheme;
-        if (probeConfig.httpActionScheme.isPresent()) {
+        if (probeConfig.httpActionScheme().isPresent()) {
             // 1. User in Probe config
-            scheme = probeConfig.httpActionScheme.get();
-        } else if (portFromConfig != null && portFromConfig.tls) {
+            scheme = probeConfig.httpActionScheme().get();
+        } else if (portFromConfig != null && portFromConfig.tls()) {
             // 2. User in Ports config
             scheme = SCHEME_HTTPS;
         } else if (portName.isPresent()
@@ -1111,10 +1113,10 @@ public class KubernetesCommonHelper {
             Optional<KubernetesHealthReadinessPathBuildItem> readinessPath,
             Optional<KubernetesHealthStartupPathBuildItem> startupPath) {
         List<DecoratorBuildItem> result = new ArrayList<>();
-        createLivenessProbe(name, target, livenessProbe, livenessPath).ifPresent(d -> result.add(d));
-        createReadinessProbe(name, target, readinessProbe, readinessPath).ifPresent(d -> result.add(d));
+        createLivenessProbe(name, target, livenessProbe, livenessPath).ifPresent(result::add);
+        createReadinessProbe(name, target, readinessProbe, readinessPath).ifPresent(result::add);
         if (!KNATIVE.equals(target)) { // see https://github.com/quarkusio/quarkus/issues/33944
-            createStartupProbe(name, target, startupProbe, startupPath).ifPresent(d -> result.add(d));
+            createStartupProbe(name, target, startupProbe, startupPath).ifPresent(result::add);
         }
         return result;
     }
@@ -1179,16 +1181,24 @@ public class KubernetesCommonHelper {
         return result;
     }
 
-    private static List<PolicyRule> toPolicyRulesList(Map<String, PolicyRuleConfig> policyRules) {
-        return policyRules.values()
-                .stream()
-                .map(it -> new PolicyRuleBuilder()
-                        .withApiGroups(it.apiGroups.orElse(LIST_WITH_EMPTY))
-                        .withNonResourceURLs(it.nonResourceUrls.orElse(null))
-                        .withResourceNames(it.resourceNames.orElse(null))
-                        .withResources(it.resources.orElse(null))
-                        .withVerbs(it.verbs.orElse(null))
-                        .build())
-                .collect(Collectors.toList());
+    private static List<PolicyRule> toPolicyRulesList(Map<String, RbacConfig.PolicyRuleConfig> policyRules) {
+        return policyRules.values().stream().map(RBACUtil::from).toList();
+    }
+
+    private static String parseVCSUri(VCSUriConfig config, ScmInfo scm) {
+        if (!config.enabled()) {
+            return null;
+        }
+        if (config.override().isPresent()) {
+            return config.override().get();
+        }
+        if (scm == null) {
+            return null;
+        }
+        String originRemote = scm.getRemote().get("origin");
+        if (originRemote == null || originRemote.isBlank()) {
+            return null;
+        }
+        return Git.sanitizeRemoteUrl(originRemote);
     }
 }

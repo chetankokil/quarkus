@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.net.URL;
 import java.time.Duration;
-import java.util.List;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -19,78 +18,41 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import io.quarkus.builder.Version;
-import io.quarkus.maven.dependency.Dependency;
+import io.quarkus.security.ForbiddenException;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.test.utils.TestIdentityController;
 import io.quarkus.security.test.utils.TestIdentityProvider;
 import io.quarkus.test.QuarkusUnitTest;
 import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.vertx.http.runtime.security.HttpSecurityPolicy;
+import io.quarkus.vertx.http.runtime.security.QuarkusHttpUser;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.client.WebClient;
 
-public class PathMatchingHttpSecurityPolicyTest {
+public abstract class PathMatchingHttpSecurityPolicyTest {
 
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
-    private static final String APP_PROPS = """
-            quarkus.http.auth.permission.authenticated.paths=/
-            quarkus.http.auth.permission.authenticated.policy=authenticated
-            quarkus.http.auth.permission.public.paths=/api*
-            quarkus.http.auth.permission.public.policy=permit
-            quarkus.http.auth.permission.foo.paths=/api/foo/bar
-            quarkus.http.auth.permission.foo.policy=authenticated
-            quarkus.http.auth.permission.inner-wildcard.paths=/api/*/bar
-            quarkus.http.auth.permission.inner-wildcard.policy=authenticated
-            quarkus.http.auth.permission.inner-wildcard2.paths=/api/next/*/prev
-            quarkus.http.auth.permission.inner-wildcard2.policy=authenticated
-            quarkus.http.auth.permission.inner-wildcard3.paths=/api/one/*/three/*
-            quarkus.http.auth.permission.inner-wildcard3.policy=authenticated
-            quarkus.http.auth.permission.inner-wildcard4.paths=/api/one/*/*/five
-            quarkus.http.auth.permission.inner-wildcard4.policy=authenticated
-            quarkus.http.auth.permission.inner-wildcard5.paths=/api/one/*/jamaica/*
-            quarkus.http.auth.permission.inner-wildcard5.policy=permit
-            quarkus.http.auth.permission.inner-wildcard6.paths=/api/*/sadly/*/dont-know
-            quarkus.http.auth.permission.inner-wildcard6.policy=deny
-            quarkus.http.auth.permission.baz.paths=/api/baz
-            quarkus.http.auth.permission.baz.policy=authenticated
-            quarkus.http.auth.permission.static-resource.paths=/static-file.html
-            quarkus.http.auth.permission.static-resource.policy=authenticated
-            quarkus.http.auth.permission.fubar.paths=/api/fubar/baz*
-            quarkus.http.auth.permission.fubar.policy=authenticated
-            quarkus.http.auth.permission.management.paths=/q/*
-            quarkus.http.auth.permission.management.policy=authenticated
-            quarkus.http.auth.policy.shared1.roles.root=admin,user
-            quarkus.http.auth.permission.shared1.paths=/secured/*
-            quarkus.http.auth.permission.shared1.policy=shared1
-            quarkus.http.auth.permission.shared1.shared=true
-            quarkus.http.auth.policy.unshared1.roles-allowed=user
-            quarkus.http.auth.permission.unshared1.paths=/secured/user/*
-            quarkus.http.auth.permission.unshared1.policy=unshared1
-            quarkus.http.auth.policy.unshared2.roles-allowed=admin
-            quarkus.http.auth.permission.unshared2.paths=/secured/admin/*
-            quarkus.http.auth.permission.unshared2.policy=unshared2
-            quarkus.http.auth.permission.shared2.paths=/*
-            quarkus.http.auth.permission.shared2.shared=true
-            quarkus.http.auth.permission.shared2.policy=custom
-            """;
     private static WebClient client;
 
-    @RegisterExtension
-    static QuarkusUnitTest test = new QuarkusUnitTest().setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class)
-            .addClasses(TestIdentityController.class, TestIdentityProvider.class, PathHandler.class,
-                    RouteHandler.class, CustomNamedPolicy.class)
-            .addAsResource("static-file.html", "META-INF/resources/static-file.html")
-            .addAsResource(new StringAsset(APP_PROPS), "application.properties")).setForcedDependencies(List.of(
-                    Dependency.of("io.quarkus", "quarkus-smallrye-health", Version.getVersion()),
-                    Dependency.of("io.quarkus", "quarkus-smallrye-openapi", Version.getVersion())));
+    protected static QuarkusUnitTest createQuarkusUnitTest(String applicationProperties, Class<?>... additionalTestClasses) {
+        return new QuarkusUnitTest().setArchiveProducer(() -> {
+            var javaArchive = ShrinkWrap.create(JavaArchive.class)
+                    .addClasses(TestIdentityController.class, TestIdentityProvider.class, PathHandler.class,
+                            RouteHandler.class, CustomNamedPolicy.class)
+                    .addAsResource("static-file.html", "META-INF/resources/static-file.html")
+                    .addAsResource(new StringAsset(applicationProperties), "application.properties");
+            if (additionalTestClasses.length > 0) {
+                javaArchive.addClasses(additionalTestClasses);
+            }
+            return javaArchive;
+        });
+    }
 
     @BeforeAll
     public static void setup() {
@@ -98,7 +60,10 @@ public class PathMatchingHttpSecurityPolicyTest {
                 .add("test", "test", "test")
                 .add("admin", "admin", "admin")
                 .add("user", "user", "user")
-                .add("root", "root", "root");
+                .add("admin1", "admin1", "admin1")
+                .add("root1", "root1", "root1")
+                .add("root", "root", "root")
+                .add("public1", "public1", "public1");
     }
 
     @AfterAll
@@ -180,25 +145,6 @@ public class PathMatchingHttpSecurityPolicyTest {
         assurePathAuthenticated(path);
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "///q/openapi", "/q///openapi", "/q/openapi/", "/q/openapi///"
-    })
-    public void testOpenApiPath(String path) {
-        assurePath(path, 401);
-        assurePathAuthenticated(path, "openapi");
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "/q/health", "/q/health/live", "/q/health/ready", "//q/health", "///q/health", "///q///health",
-            "/q/health/", "/q///health/", "/q///health////live"
-    })
-    public void testHealthCheckPaths(String path) {
-        assurePath(path, 401);
-        assurePathAuthenticated(path, "UP");
-    }
-
     @Test
     public void testMiscellaneousPaths() {
         // /api/baz with segment indicating version shouldn't match /api/baz path policy
@@ -223,15 +169,20 @@ public class PathMatchingHttpSecurityPolicyTest {
         assurePath("/secured/all", 401, null, null, null);
         assurePath("/secured/all", 200, null, "test", null);
         assurePath("/secured/all", 200, null, "root", null);
+        assurePath("/secured/all", 200, null, "root1", null);
         assurePath("/secured/all", 200, null, "admin", null);
         assurePath("/secured/user", 403, null, "test", null);
         assurePath("/secured/user", 403, null, "admin", null);
+        assurePath("/secured/user", 403, null, "admin1", null);
         assurePath("/secured/user", 200, null, "root", null);
+        assurePath("/secured/user", 200, null, "root1", null);
         assurePath("/secured/user", 200, null, "user", null);
         assurePath("/secured/admin", 403, null, "user", null);
         assurePath("/secured/admin", 403, null, "test", null);
         assurePath("/secured/admin", 200, null, "admin", null);
+        assurePath("/secured/admin", 200, null, "admin1", null);
         assurePath("/secured/admin", 200, null, "root", null);
+        assurePath("/secured/admin", 200, null, "root1", null);
     }
 
     @Test
@@ -240,10 +191,26 @@ public class PathMatchingHttpSecurityPolicyTest {
         assurePath("/secured/user", 403, null, "root", "deny-header");
     }
 
+    @Test
+    public void testRolesMappingOnPublicPath() {
+        // here no HTTP Security policy that requires authentication is applied, and we want to check that identity
+        // is still augmented
+        assurePath("/api/public", 200, null, "public1", null);
+        assurePath("/api/public", 403, null, "root1", null);
+    }
+
     @ApplicationScoped
     public static class RouteHandler {
         public void setup(@Observes Router router) {
             router.route("/api/baz").order(-1).handler(rc -> rc.response().end("/api/baz response"));
+            router.route("/api/public").order(-1).handler(rc -> {
+                if (rc.user() instanceof QuarkusHttpUser user && user.getSecurityIdentity() != null
+                        && user.getSecurityIdentity().hasRole("public2")) {
+                    rc.response().end("/api/public");
+                } else {
+                    rc.fail(new ForbiddenException());
+                }
+            });
         }
     }
 
@@ -283,7 +250,7 @@ public class PathMatchingHttpSecurityPolicyTest {
             if (event.request().getHeader("deny-header") != null) {
                 return Uni.createFrom().item(CheckResult.DENY);
             }
-            return Uni.createFrom().item(CheckResult.PERMIT);
+            return CheckResult.permit();
         }
 
         @Override

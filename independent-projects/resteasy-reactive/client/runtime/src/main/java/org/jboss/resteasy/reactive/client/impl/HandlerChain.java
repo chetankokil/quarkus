@@ -36,20 +36,40 @@ class HandlerChain {
 
     private ClientRestHandler preClientSendHandler = null;
 
-    public HandlerChain(boolean captureStacktrace, int maxChunkSize, boolean followRedirects, LoggingScope loggingScope,
+    public HandlerChain(boolean captureStacktrace, int maxChunkSize, int inputStreamChunkSize, boolean followRedirects,
+            LoggingScope loggingScope,
             Map<Class<?>, MultipartResponseData> multipartData, ClientLogger clientLogger) {
         this.clientCaptureCurrentContextRestHandler = new ClientCaptureCurrentContextRestHandler(captureStacktrace);
         this.clientSwitchToRequestContextRestHandler = new ClientSwitchToRequestContextRestHandler();
-        this.clientSendHandler = new ClientSendRequestHandler(maxChunkSize, followRedirects, loggingScope, clientLogger,
+        this.clientSendHandler = new ClientSendRequestHandler(maxChunkSize, inputStreamChunkSize, followRedirects, loggingScope,
+                clientLogger,
                 multipartData);
         this.clientSetResponseEntityRestHandler = new ClientSetResponseEntityRestHandler();
         this.clientResponseCompleteRestHandler = new ClientResponseCompleteRestHandler();
         this.clientErrorHandler = new ClientErrorHandler(loggingScope);
     }
 
+    private HandlerChain(ClientRestHandler clientCaptureCurrentContextRestHandler,
+            ClientRestHandler clientSwitchToRequestContextRestHandler, ClientRestHandler clientSendHandler,
+            ClientRestHandler clientSetResponseEntityRestHandler, ClientRestHandler clientResponseCompleteRestHandler,
+            ClientRestHandler clientErrorHandler) {
+        this.clientCaptureCurrentContextRestHandler = clientCaptureCurrentContextRestHandler;
+        this.clientSwitchToRequestContextRestHandler = clientSwitchToRequestContextRestHandler;
+        this.clientSendHandler = clientSendHandler;
+        this.clientSetResponseEntityRestHandler = clientSetResponseEntityRestHandler;
+        this.clientResponseCompleteRestHandler = clientResponseCompleteRestHandler;
+        this.clientErrorHandler = clientErrorHandler;
+    }
+
+    private HandlerChain newInstance() {
+        return new HandlerChain(clientCaptureCurrentContextRestHandler, clientSwitchToRequestContextRestHandler,
+                clientSendHandler, clientSetResponseEntityRestHandler, clientResponseCompleteRestHandler, clientErrorHandler);
+    }
+
     HandlerChain setPreClientSendHandler(ClientRestHandler preClientSendHandler) {
-        this.preClientSendHandler = preClientSendHandler;
-        return this;
+        HandlerChain newHandlerChain = newInstance();
+        newHandlerChain.preClientSendHandler = preClientSendHandler;
+        return newHandlerChain;
     }
 
     ClientRestHandler[] createHandlerChain(ConfigurationImpl configuration) {
@@ -67,10 +87,10 @@ class HandlerChain {
         if (preClientSendHandler != null) {
             result.add(preClientSendHandler);
         }
+        result.add(clientCaptureCurrentContextRestHandler);
         for (int i = 0; i < requestFilters.size(); i++) {
             result.add(new ClientRequestFilterRestHandler(requestFilters.get(i)));
         }
-        result.add(clientCaptureCurrentContextRestHandler);
         result.add(clientSwitchToRequestContextRestHandler);
         result.add(clientSendHandler);
         result.add(clientSetResponseEntityRestHandler);

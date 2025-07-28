@@ -67,9 +67,47 @@ public class PackageIT extends MojoTestBase {
             assertThat(name).doesNotStartWith("quarkus.test.");
         }
 
-        result = running.execute(List.of("package -DskipTests -Dquarkus.package.type=uber-jar"), Map.of());
+        result = running.execute(List.of("package -DskipTests -Dquarkus.package.jar.type=uber-jar"), Map.of());
         assertThat(result.getProcess().waitFor()).isEqualTo(0);
-        assertThat(running.log()).contains("Option quarkus.package.type has changed since the last build from jar to uber-jar");
+        assertThat(running.log())
+                .contains("Option quarkus.package.jar.type has changed since the last build from fast-jar to uber-jar");
+    }
+
+    @Test
+    public void testConfigTrackingCustomFile() throws Exception {
+        testDir = initProject("projects/config-tracking-custom-file");
+        running = new RunningInvoker(testDir, false);
+        var configDump = new File(new File(testDir, ".quarkus"), "quarkus-prod-used-config-options");
+        var configCheck = new File(new File(testDir, "target"), "quarkus-prod-config-check");
+
+        // initial build that generates .quarkus/quarkus-prod-config-dump
+        var result = running.execute(List.of("clean package -DskipTests"), Map.of());
+        assertThat(result.getProcess().waitFor()).isEqualTo(0);
+        assertThat(configDump).exists();
+        assertThat(configCheck).doesNotExist();
+
+        // rebuild and compare the files
+        result = running.execute(List.of("clean package -DskipTests"), Map.of());
+        assertThat(result.getProcess().waitFor()).isEqualTo(0);
+        assertThat(configDump).exists();
+        assertThat(configCheck).exists();
+        assertThat(configDump).hasSameTextualContentAs(configCheck);
+
+        var props = new Properties();
+        try (BufferedReader reader = Files.newBufferedReader(configDump.toPath())) {
+            props.load(reader);
+        }
+        assertThat(props).containsEntry("quarkus.application.name", HashUtil.sha512("code-with-quarkus"));
+
+        assertThat(props).doesNotContainKey("quarkus.platform.group-id");
+        for (var name : props.stringPropertyNames()) {
+            assertThat(name).doesNotStartWith("quarkus.test.");
+        }
+
+        result = running.execute(List.of("package -DskipTests -Dquarkus.package.jar.type=uber-jar"), Map.of());
+        assertThat(result.getProcess().waitFor()).isEqualTo(0);
+        assertThat(running.log())
+                .contains("Option quarkus.package.jar.type has changed since the last build from fast-jar to uber-jar");
     }
 
     @Test
@@ -183,7 +221,7 @@ public class PackageIT extends MojoTestBase {
 
     private void createAndVerifyUberJar() throws IOException, MavenInvocationException, InterruptedException {
         Properties p = new Properties();
-        p.setProperty("quarkus.package.type", "uber-jar");
+        p.setProperty("quarkus.package.jar.type", "uber-jar");
 
         running = new RunningInvoker(testDir, false);
         final MavenProcessInvocationResult result = running.execute(List.of("package"),
@@ -219,8 +257,8 @@ public class PackageIT extends MojoTestBase {
         testDir = initProject("projects/uberjar-check", "projects/uberjar-runner-suffix-off");
 
         Properties p = new Properties();
-        p.setProperty("quarkus.package.type", "uber-jar");
-        p.setProperty("quarkus.package.add-runner-suffix", "false");
+        p.setProperty("quarkus.package.jar.type", "uber-jar");
+        p.setProperty("quarkus.package.jar.add-runner-suffix", "false");
 
         running = new RunningInvoker(testDir, false);
         final MavenProcessInvocationResult result = running.execute(List.of("-DskipTests", "package"),
@@ -281,7 +319,7 @@ public class PackageIT extends MojoTestBase {
         running = new RunningInvoker(testDir, false);
 
         Properties p = new Properties();
-        p.setProperty("quarkus.package.type", "uber-jar");
+        p.setProperty("quarkus.package.jar.type", "uber-jar");
         final MavenProcessInvocationResult result = running.execute(Collections.singletonList("package"),
                 Collections.emptyMap(), p);
         assertThat(result.getProcess().waitFor()).isEqualTo(0);
@@ -309,7 +347,7 @@ public class PackageIT extends MojoTestBase {
 
         running = new RunningInvoker(testDir, false);
         final MavenProcessInvocationResult result = running.execute(Collections.singletonList("package"),
-                Collections.singletonMap("QUARKUS_PACKAGE_TYPE", "legacy-jar"));
+                Collections.singletonMap("QUARKUS_PACKAGE_JAR_TYPE", "legacy-jar"));
 
         assertThat(result.getProcess().waitFor()).isEqualTo(0);
 
@@ -390,7 +428,7 @@ public class PackageIT extends MojoTestBase {
 
         running = new RunningInvoker(testDir, false);
         final MavenProcessInvocationResult result = running.execute(
-                Arrays.asList("package", "-Dquarkus.package.type=native-sources"),
+                Arrays.asList("package", "-Dquarkus.native.enabled=true", "-Dquarkus.native.sources-only=true"),
                 Collections.emptyMap());
 
         assertThat(result.getProcess().waitFor()).isEqualTo(0);

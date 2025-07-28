@@ -49,6 +49,11 @@
             </dependency>
             <dependency>
                 <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-classloader-commons</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-bootstrap-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -416,7 +421,7 @@
             </dependency>
             <dependency>
                 <groupId>org.graalvm.sdk</groupId>
-                <artifactId>graal-sdk</artifactId>
+                <artifactId>nativeimage</artifactId>
                 <version>${graal-sdk.version}</version>
             </dependency>
             <dependency>
@@ -466,9 +471,9 @@
                 </exclusions>
             </dependency>
             <dependency>
-                <groupId>io.github.crac</groupId>
-                <artifactId>org-crac</artifactId>
-                <version>${org-crac.version}</version>
+                <groupId>org.crac</groupId>
+                <artifactId>crac</artifactId>
+                <version>${crac.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.smallrye.beanbag</groupId>

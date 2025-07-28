@@ -5,7 +5,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
 
 import javax.inject.Inject;
 
@@ -17,25 +16,31 @@ import org.gradle.workers.WorkQueue;
 import org.gradle.workers.WorkerExecutor;
 
 import io.quarkus.gradle.extension.QuarkusPluginExtension;
-import io.quarkus.utilities.OS;
+import io.smallrye.common.os.OS;
 
 public abstract class QuarkusTask extends DefaultTask {
-    private static final List<String> WORKER_BUILD_FORK_OPTIONS = List.of("quarkus.");
+    private static final List<String> WORKER_BUILD_FORK_OPTIONS = List.of("quarkus.", "platform.quarkus.");
 
     private final transient QuarkusPluginExtension extension;
     protected final File projectDir;
     protected final File buildDir;
 
     QuarkusTask(String description) {
+        this(description, false);
+    }
+
+    QuarkusTask(String description, boolean configurationCacheCompatible) {
         setDescription(description);
         setGroup("quarkus");
         this.extension = getProject().getExtensions().findByType(QuarkusPluginExtension.class);
         this.projectDir = getProject().getProjectDir();
-        this.buildDir = getProject().getBuildDir();
+        this.buildDir = getProject().getLayout().getBuildDirectory().getAsFile().get();
 
         // Calling this method tells Gradle that it should not fail the build. Side effect is that the configuration
         // cache will be at least degraded, but the build will not fail.
-        notCompatibleWithConfigurationCache("The Quarkus Plugin isn't compatible with the configuration cache");
+        if (!configurationCacheCompatible) {
+            notCompatibleWithConfigurationCache("The Quarkus Plugin isn't compatible with the configuration cache");
+        }
     }
 
     @Inject
@@ -45,17 +50,17 @@ public abstract class QuarkusTask extends DefaultTask {
         return extension;
     }
 
-    WorkQueue workQueue(Map<String, String> configMap, Supplier<List<Action<? super JavaForkOptions>>> forkOptionsActions) {
+    WorkQueue workQueue(Map<String, String> configMap, List<Action<? super JavaForkOptions>> forkOptionsSupplier) {
         WorkerExecutor workerExecutor = getWorkerExecutor();
 
         // Use process isolation by default, unless Gradle's started with its debugging system property or the
-        // system property `quarkus.gradle-worker.no-process is set to `true`.
+        // system property `quarkus.gradle-worker.no-process` is set to `true`.
         if (Boolean.getBoolean("org.gradle.debug") || Boolean.getBoolean("quarkus.gradle-worker.no-process")) {
             return workerExecutor.classLoaderIsolation();
         }
 
         return workerExecutor.processIsolation(processWorkerSpec -> configureProcessWorkerSpec(processWorkerSpec,
-                configMap, forkOptionsActions.get()));
+                configMap, forkOptionsSupplier));
     }
 
     private void configureProcessWorkerSpec(ProcessWorkerSpec processWorkerSpec, Map<String, String> configMap,
@@ -77,7 +82,7 @@ public abstract class QuarkusTask extends DefaultTask {
         // Pass all environment variables
         forkOptions.environment(System.getenv());
 
-        if (OS.determineOS() == OS.WINDOWS) {
+        if (OS.current() == OS.WINDOWS) {
             // On Windows, gRPC code generation is sometimes(?) unable to find "java.exe". Feels (not proven) that
             // the grpc code generation tool looks up "java.exe" instead of consulting the 'JAVA_HOME' environment.
             // Might be, that Gradle's process isolation "loses" some information down to the worker process, so add

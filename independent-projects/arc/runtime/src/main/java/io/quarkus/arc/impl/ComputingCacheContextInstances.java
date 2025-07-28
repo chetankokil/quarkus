@@ -6,11 +6,11 @@ import java.util.function.Supplier;
 
 import io.quarkus.arc.ContextInstanceHandle;
 
-class ComputingCacheContextInstances implements ContextInstances {
+public class ComputingCacheContextInstances implements ContextInstances {
 
     protected final ComputingCache<String, ContextInstanceHandle<?>> instances;
 
-    ComputingCacheContextInstances() {
+    public ComputingCacheContextInstances() {
         instances = new ComputingCache<>();
     }
 
@@ -37,7 +37,7 @@ class ComputingCacheContextInstances implements ContextInstances {
     @Override
     public void removeEach(Consumer<? super ContextInstanceHandle<?>> action) {
         if (action != null) {
-            instances.getPresentValues().forEach(action);
+            instances.forEachExistingValue(action);
         }
         instances.clear();
     }

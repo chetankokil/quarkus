@@ -15,6 +15,7 @@ repositories {
 }
 
 dependencies {
+    compileOnly 'com.google.protobuf:protobuf-kotlin'
     implementation 'io.quarkus:quarkus-kotlin'
     implementation 'io.quarkus:quarkus-grpc'
     implementation 'io.quarkus:quarkus-smallrye-graphql'
@@ -26,8 +27,8 @@ dependencies {
     testImplementation 'io.rest-assured:kotlin-extensions'
 }
 
-group 'org.acme'
-version '1.0.0-SNAPSHOT'
+group = 'org.acme'
+version = '1.0.0-SNAPSHOT'
 
 allOpen {
     annotation("jakarta.ws.rs.Path")

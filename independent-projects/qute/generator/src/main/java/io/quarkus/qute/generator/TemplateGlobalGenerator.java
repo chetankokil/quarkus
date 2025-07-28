@@ -11,6 +11,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.jboss.jandex.AnnotationTarget;
 import org.jboss.jandex.ClassInfo;
@@ -24,6 +25,7 @@ import io.quarkus.gizmo.BytecodeCreator;
 import io.quarkus.gizmo.ClassCreator;
 import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.gizmo.FieldDescriptor;
+import io.quarkus.gizmo.FunctionCreator;
 import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
@@ -46,13 +48,13 @@ public class TemplateGlobalGenerator extends AbstractGenerator {
     private final String namespace;
     private int priority;
 
-    public TemplateGlobalGenerator(ClassOutput classOutput, String namespace, int priority, IndexView index) {
+    public TemplateGlobalGenerator(ClassOutput classOutput, String namespace, int initialPriority, IndexView index) {
         super(index, classOutput);
         this.namespace = namespace;
-        this.priority = priority;
+        this.priority = initialPriority;
     }
 
-    public void generate(ClassInfo declaringClass, Map<String, AnnotationTarget> targets) {
+    public String generate(ClassInfo declaringClass, Map<String, AnnotationTarget> targets) {
 
         String baseName;
         if (declaringClass.enclosingClass() != null) {
@@ -63,7 +65,8 @@ public class TemplateGlobalGenerator extends AbstractGenerator {
         }
         String targetPackage = packageName(declaringClass.name());
         String generatedName = generatedNameFromTarget(targetPackage, baseName, SUFFIX);
-        generatedTypes.add(generatedName.replace('/', '.'));
+        String generatedClassName = generatedName.replace('/', '.');
+        generatedTypes.add(generatedClassName);
 
         ClassCreator provider = ClassCreator.builder().classOutput(classOutput).className(generatedName)
                 .interfaces(TemplateGlobalProvider.class).build();
@@ -74,22 +77,27 @@ public class TemplateGlobalGenerator extends AbstractGenerator {
 
         for (Entry<String, AnnotationTarget> entry : targets.entrySet()) {
             ResultHandle name = accept.load(entry.getKey());
+            FunctionCreator fun = accept.createFunction(Function.class);
+            BytecodeCreator funBytecode = fun.getBytecode();
             ResultHandle global;
             switch (entry.getValue().kind()) {
                 case FIELD:
                     FieldInfo field = entry.getValue().asField();
                     validate(field);
-                    global = accept.readStaticField(FieldDescriptor.of(field));
+                    global = funBytecode.readStaticField(FieldDescriptor.of(field));
                     break;
                 case METHOD:
                     MethodInfo method = entry.getValue().asMethod();
                     validate(method);
-                    global = accept.invokeStaticMethod(MethodDescriptor.of(method));
+                    global = funBytecode.invokeStaticMethod(MethodDescriptor.of(method));
                     break;
                 default:
                     throw new IllegalStateException("Unsupported target: " + entry.getValue());
             }
-            accept.invokeInterfaceMethod(Descriptors.TEMPLATE_INSTANCE_DATA, accept.getMethodParam(0), name, global);
+            funBytecode.returnValue(global);
+            // Global variables are computed lazily
+            accept.invokeInterfaceMethod(Descriptors.TEMPLATE_INSTANCE_COMPUTED_DATA, accept.getMethodParam(0), name,
+                    fun.getInstance());
         }
         accept.returnValue(null);
 
@@ -134,6 +142,7 @@ public class TemplateGlobalGenerator extends AbstractGenerator {
         resolve.returnValue(resolve.invokeStaticMethod(Descriptors.RESULTS_NOT_FOUND_EC, evalContext));
 
         provider.close();
+        return generatedClassName;
     }
 
     public Set<String> getGeneratedTypes() {

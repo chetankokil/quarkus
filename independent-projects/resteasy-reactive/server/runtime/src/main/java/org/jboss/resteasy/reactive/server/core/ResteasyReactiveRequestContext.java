@@ -14,27 +14,44 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 
+import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.spi.CDI;
+import jakarta.ws.rs.container.AsyncResponse;
+import jakarta.ws.rs.container.CompletionCallback;
+import jakarta.ws.rs.container.ResourceContext;
+import jakarta.ws.rs.container.ResourceInfo;
+import jakarta.ws.rs.core.Application;
+import jakarta.ws.rs.core.Configuration;
 import jakarta.ws.rs.core.Cookie;
 import jakarta.ws.rs.core.GenericEntity;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.PathSegment;
 import jakarta.ws.rs.core.Request;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
 import jakarta.ws.rs.core.UriInfo;
+import jakarta.ws.rs.ext.Providers;
 import jakarta.ws.rs.ext.ReaderInterceptor;
 import jakarta.ws.rs.ext.WriterInterceptor;
+import jakarta.ws.rs.sse.Sse;
+import jakarta.ws.rs.sse.SseEventSink;
 
 import org.jboss.resteasy.reactive.common.NotImplementedYet;
 import org.jboss.resteasy.reactive.common.core.AbstractResteasyReactiveContext;
 import org.jboss.resteasy.reactive.common.util.Encode;
+import org.jboss.resteasy.reactive.common.util.PathHelper;
 import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
+import org.jboss.resteasy.reactive.common.util.QuarkusMultivaluedHashMap;
+import org.jboss.resteasy.reactive.server.SimpleResourceInfo;
 import org.jboss.resteasy.reactive.server.core.multipart.FormData;
 import org.jboss.resteasy.reactive.server.core.serialization.EntityWriter;
+import org.jboss.resteasy.reactive.server.handlers.RestInitialHandler;
 import org.jboss.resteasy.reactive.server.injection.ResteasyReactiveInjectionContext;
 import org.jboss.resteasy.reactive.server.jaxrs.AsyncResponseImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.ContainerRequestContextImpl;
@@ -42,8 +59,11 @@ import org.jboss.resteasy.reactive.server.jaxrs.ContainerResponseContextImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.HttpHeadersImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.ProvidersImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.RequestImpl;
+import org.jboss.resteasy.reactive.server.jaxrs.ResourceContextImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.SseEventSinkImpl;
+import org.jboss.resteasy.reactive.server.jaxrs.SseImpl;
 import org.jboss.resteasy.reactive.server.jaxrs.UriInfoImpl;
+import org.jboss.resteasy.reactive.server.mapping.RequestMapper;
 import org.jboss.resteasy.reactive.server.mapping.RuntimeResource;
 import org.jboss.resteasy.reactive.server.mapping.URITemplate;
 import org.jboss.resteasy.reactive.server.multipart.FormValue;
@@ -111,6 +131,8 @@ public abstract class ResteasyReactiveRequestContext
     // this is only set if we override the requestUri
     private String scheme;
     // this is only set if we override the requestUri
+    private String query;
+    // this is only set if we override the requestUri
     private String authority;
     private String remaining;
     private EncodedMediaType responseContentType;
@@ -137,6 +159,8 @@ public abstract class ResteasyReactiveRequestContext
     private OutputStream underlyingOutputStream;
     private FormData formData;
     private boolean producesChecked;
+
+    private RequestMapper.RequestMatch<RestInitialHandler.InitialMatch> initialMatch;
 
     public ResteasyReactiveRequestContext(Deployment deployment,
             ThreadSetupAction requestContext, ServerRestHandler[] handlerChain, ServerRestHandler[] abortHandlerChain) {
@@ -183,6 +207,44 @@ public abstract class ResteasyReactiveRequestContext
                     (PreviousResource) getProperty(PreviousResource.PROPERTY_KEY)));
         }
         this.target = target;
+    }
+
+    public void setupInitialMatchAndRestart(RequestMapper.RequestMatch<RestInitialHandler.InitialMatch> initialMatch) {
+        this.initialMatch = initialMatch;
+
+        restart(initialMatch.value.handlers);
+        setMaxPathParams(initialMatch.value.maxPathParams);
+        setRemaining(initialMatch.remaining);
+        for (int i = 0; i < initialMatch.pathParamValues.length; ++i) {
+            String pathParamValue = initialMatch.pathParamValues[i];
+            if (pathParamValue == null) {
+                break;
+            }
+            setPathParamValue(i, initialMatch.pathParamValues[i]);
+        }
+    }
+
+    /**
+     * Restarts handler chain processing if another initial match is found.
+     *
+     * @return true if a restart occurred
+     */
+    public boolean restartWithNextInitialMatch() {
+        initialMatch = new RequestMapper<>(deployment.getClassMappers()).continueMatching(getPathWithoutPrefix(), initialMatch);
+        if (initialMatch == null) {
+            return false;
+        }
+        restart(initialMatch.value.handlers);
+        setMaxPathParams(initialMatch.value.maxPathParams);
+        setRemaining(initialMatch.remaining);
+        for (int i = 0; i < initialMatch.pathParamValues.length; ++i) {
+            String pathParamValue = initialMatch.pathParamValues[i];
+            if (pathParamValue == null) {
+                break;
+            }
+            setPathParamValue(i, initialMatch.pathParamValues[i]);
+        }
+        return true;
     }
 
     /**
@@ -429,20 +491,7 @@ public abstract class ResteasyReactiveRequestContext
      * Returns the normalised non-decoded path excluding any prefix.
      */
     public String getPathWithoutPrefix() {
-        String path = getPath();
-        if (path != null) {
-            String prefix = deployment.getPrefix();
-            if (!prefix.isEmpty()) {
-                // FIXME: can we really have paths that don't start with the prefix if there's a prefix?
-                if (path.startsWith(prefix)) {
-                    if (path.length() == prefix.length()) {
-                        return "/";
-                    }
-                    return path.substring(prefix.length());
-                }
-            }
-        }
-        return path;
+        return PathHelper.getPathWithoutPrefix(getPath(), deployment.getPrefix());
     }
 
     /**
@@ -457,12 +506,13 @@ public abstract class ResteasyReactiveRequestContext
 
     public String getAbsoluteURI() {
         // if we never changed the path we can use the vert.x URI
-        if (path == null)
+        if (path == null) {
             return serverRequest().getRequestAbsoluteUri();
+        }
         // Note: we could store our cache as normalised, but I'm not sure if the vertx one is normalised
         if (absoluteUri == null) {
             try {
-                absoluteUri = new URI(scheme, authority, path, null, null).toASCIIString();
+                absoluteUri = new URI(getScheme(), getAuthority(), path, query, null).toASCIIString();
             } catch (URISyntaxException e) {
                 throw new RuntimeException(e);
             }
@@ -471,14 +521,16 @@ public abstract class ResteasyReactiveRequestContext
     }
 
     public String getScheme() {
-        if (scheme == null)
+        if (scheme == null) {
             return serverRequest().getRequestScheme();
+        }
         return scheme;
     }
 
     public String getAuthority() {
-        if (authority == null)
+        if (authority == null) {
             return serverRequest().getRequestHost();
+        }
         return authority;
     }
 
@@ -486,6 +538,7 @@ public abstract class ResteasyReactiveRequestContext
         this.path = requestURI.getPath();
         this.authority = requestURI.getRawAuthority();
         this.scheme = requestURI.getScheme();
+        this.query = requestURI.getQuery();
         setQueryParamsFrom(requestURI.toString());
         // invalidate those
         this.uriInfo = null;
@@ -640,7 +693,9 @@ public abstract class ResteasyReactiveRequestContext
 
     protected void endResponse() {
         if (serverResponse().headWritten()) {
-            serverRequest().closeConnection();
+            if (!serverResponse().closed()) {
+                serverRequest().closeConnection();
+            }
         } else {
             serverResponse().setStatusCode(500).end();
         }
@@ -817,21 +872,69 @@ public abstract class ResteasyReactiveRequestContext
     @Override
     public Object getHeader(String name, boolean single) {
         if (httpHeaders == null) {
-            if (single)
-                return serverRequest().getRequestHeader(name);
+            if (single) {
+                String header = serverRequest().getRequestHeader(name);
+                if (header == null || header.isEmpty()) {
+                    return null;
+                } else {
+                    return header;
+                }
+            }
             // empty collections must not be turned to null
-            return serverRequest().getAllRequestHeaders(name);
+            return filterEmpty(serverRequest().getAllRequestHeaders(name));
         } else {
-            if (single)
-                return httpHeaders.getMutableHeaders().getFirst(name);
+            if (single) {
+                String header = httpHeaders.getMutableHeaders().getFirst(name);
+                if (header == null || header.isEmpty()) {
+                    return null;
+                } else {
+                    return header;
+                }
+            }
             // empty collections must not be turned to null
             List<String> list = httpHeaders.getMutableHeaders().get(name);
             if (list == null) {
                 return Collections.emptyList();
             } else {
-                return list;
+                return filterEmpty(list);
             }
         }
+    }
+
+    private static List<String> filterEmpty(List<String> list) {
+        // empty and tiny lists are handled inlined
+        int size = list.size();
+        if (size == 0) {
+            return list;
+        }
+        if (size == 1) {
+            String val = list.get(0);
+            if (val.isEmpty()) {
+                return List.of();
+            }
+            return list;
+        }
+        // this shouldn't be common both on query params and header values
+        return filterEmptyOnNonTinyList(list);
+    }
+
+    private static List<String> filterEmptyOnNonTinyList(List<String> list) {
+        assert list.size() > 1;
+        List<String> nonEmptyList = null;
+        int remaining = list.size();
+        for (String i : list) {
+            if (!i.isEmpty()) {
+                if (nonEmptyList == null) {
+                    nonEmptyList = new ArrayList<>(remaining);
+                }
+                nonEmptyList.add(i);
+            }
+            remaining--;
+        }
+        if (nonEmptyList == null) {
+            return List.of();
+        }
+        return nonEmptyList;
     }
 
     public Object getQueryParameter(String name, boolean single, boolean encoded) {
@@ -842,6 +945,9 @@ public abstract class ResteasyReactiveRequestContext
     public Object getQueryParameter(String name, boolean single, boolean encoded, String separator) {
         if (single) {
             String val = serverRequest().getQueryParam(name);
+            if (val != null && val.isEmpty()) {
+                return null;
+            }
             if (encoded && val != null) {
                 val = Encode.encodeQueryParam(val);
             }
@@ -849,7 +955,7 @@ public abstract class ResteasyReactiveRequestContext
         }
 
         // empty collections must not be turned to null
-        List<String> strings = serverRequest().getAllQueryParams(name);
+        List<String> strings = filterEmpty(serverRequest().getAllQueryParams(name));
         if (encoded) {
             List<String> newStrings = new ArrayList<>();
             for (String i : strings) {
@@ -905,7 +1011,7 @@ public abstract class ResteasyReactiveRequestContext
     @Override
     public String getCookieParameter(String name) {
         Cookie cookie = getHttpHeaders().getCookies().get(name);
-        return cookie != null ? cookie.getValue() : null;
+        return cookie != null && !cookie.getValue().isEmpty() ? cookie.getValue() : null;
     }
 
     @Override
@@ -915,7 +1021,7 @@ public abstract class ResteasyReactiveRequestContext
         }
         if (single) {
             FormValue val = formData.getFirst(name);
-            if (val == null || val.isFileItem()) {
+            if (val == null || val.isFileItem() || val.getValue().isEmpty()) {
                 return null;
             }
             if (encoded) {
@@ -927,6 +1033,9 @@ public abstract class ResteasyReactiveRequestContext
         List<String> strings = new ArrayList<>();
         if (val != null) {
             for (FormValue i : val) {
+                if (i.getValue().isEmpty()) {
+                    continue;
+                }
                 if (encoded) {
                     strings.add(Encode.encodeQueryParam(i.getValue()));
                 } else {
@@ -934,8 +1043,97 @@ public abstract class ResteasyReactiveRequestContext
                 }
             }
         }
-        return strings;
 
+        return strings;
+    }
+
+    @Override
+    public <T> T getBeanParameter(Class<T> type) {
+        // FIXME: we don't check if it's a bean parameter at all, but this is only called from ClassInjectorTransformer
+        Instance<T> select = CDI.current().select(type);
+        if (select != null) {
+            T instance = select.get();
+            if (instance != null) {
+                registerCompletionCallback(new CompletionCallback() {
+                    @Override
+                    public void onComplete(Throwable throwable) {
+                        select.destroy(instance);
+                    }
+                });
+                return instance;
+            }
+        }
+        throw new IllegalStateException("Unsupported bean param type: " + type);
+    }
+
+    @Override
+    public <T> T getContextParameter(Class<T> type) {
+        // NOTE: Same list for CDI at ContextProducers and in EndpointIndexer.CONTEXT_TYPES
+        if (type.equals(ServerRequestContext.class)) {
+            return (T) this;
+        }
+        if (type.equals(HttpHeaders.class)) {
+            return (T) getHttpHeaders();
+        }
+        if (type.equals(UriInfo.class)) {
+            return (T) getUriInfo();
+        }
+        if (type.equals(Configuration.class)) {
+            return (T) getDeployment().getConfiguration();
+        }
+        if (type.equals(AsyncResponse.class)) {
+            AsyncResponseImpl asyncResponse = getAsyncResponse();
+            if (asyncResponse == null) {
+                asyncResponse = new AsyncResponseImpl(this);
+                setAsyncResponse(asyncResponse);
+            }
+            return (T) response;
+        }
+        if (type.equals(SseEventSink.class)) {
+            SseEventSinkImpl sseEventSink = getSseEventSink();
+            if (sseEventSink == null) {
+                sseEventSink = new SseEventSinkImpl(this);
+                setSseEventSink(sseEventSink);
+            }
+            return (T) sseEventSink;
+        }
+        if (type.equals(Request.class)) {
+            return (T) getRequest();
+        }
+        if (type.equals(Providers.class)) {
+            return (T) getProviders();
+        }
+        if (type.equals(Sse.class)) {
+            return (T) SseImpl.INSTANCE;
+        }
+        if (type.equals(ResourceInfo.class)) {
+            return (T) getTarget().getLazyMethod();
+        }
+        if (type.equals(SimpleResourceInfo.class)) {
+            return (T) getTarget().getSimplifiedResourceInfo();
+        }
+        if (type.equals(Application.class)) {
+            return (T) CDI.current().select(Application.class).get();
+        }
+        if (type.equals(SecurityContext.class)) {
+            return (T) getSecurityContext();
+        }
+        if (type.equals(ResourceContext.class)) {
+            return (T) ResourceContextImpl.INSTANCE;
+        }
+        Object instance = unwrap(type);
+        if (instance != null) {
+            return (T) instance;
+        }
+        Instance<T> select = CDI.current().select(type);
+        if (select != null) {
+            instance = select.get();
+        }
+        if (instance != null) {
+            return (T) instance;
+        }
+        // FIXME: move to build time
+        throw new IllegalStateException("Unsupported contextual type: " + type);
     }
 
     @Override
@@ -1011,6 +1209,44 @@ public abstract class ResteasyReactiveRequestContext
 
     public String getResourceLocatorPathParam(String name, boolean encoded) {
         return getResourceLocatorPathParam(name, (PreviousResource) getProperty(PreviousResource.PROPERTY_KEY), encoded);
+    }
+
+    /**
+     * Collects all path parameters, first from the current RuntimeResource, also known as target, and then from the previous
+     * RuntimeResources, including path parameters from sub resource locators in the process.
+     *
+     * @param encoded
+     * @return MultivaluedMap with path parameters. May be empty, but is never null
+     */
+    public MultivaluedMap<String, String> getAllPathParameters(boolean encoded) {
+        MultivaluedMap<String, String> pathParams = new QuarkusMultivaluedHashMap<>();
+        // a target can be null if this happens in a filter that runs before the target is set
+        if (target == null) {
+            return pathParams;
+        }
+
+        PreviousResource previousResource = null;
+        Object paramValues = this.pathParamValues;
+        do {
+            for (Map.Entry<String, Integer> pathParam : target.getPathParameterIndexes().entrySet()) {
+                pathParams.add(pathParam.getKey(), doGetPathParam(pathParam.getValue(), paramValues, encoded));
+            }
+
+            if (previousResource != null) {
+                previousResource = previousResource.prev;
+            } else {
+                previousResource = (PreviousResource) getProperty(PreviousResource.PROPERTY_KEY);
+            }
+            if (previousResource == null) {
+                break;
+            }
+
+            target = previousResource.locatorTarget;
+            paramValues = previousResource.locatorPathParamValues;
+
+        } while (true);
+
+        return pathParams;
     }
 
     public FormData getFormData() {

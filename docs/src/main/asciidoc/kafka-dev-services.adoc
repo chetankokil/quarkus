@@ -8,9 +8,9 @@ include::_attributes.adoc[]
 :categories: messaging
 :summary: Start Apache Kafka automatically in dev and test modes.
 :topics: messaging,kafka,dev-services,testing,dev-mode
-:extensions: io.quarkus:quarkus-kafka-client,io.quarkus:quarkus-smallrye-reactive-messaging-kafka
+:extensions: io.quarkus:quarkus-kafka-client,io.quarkus:quarkus-messaging-kafka
 
-If any Kafka-related extension is present (e.g. `quarkus-smallrye-reactive-messaging-kafka`), Dev Services for Kafka automatically starts a Kafka broker in dev mode and when running tests.
+If any Kafka-related extension is present (e.g. `quarkus-messaging-kafka`), Dev Services for Kafka automatically starts a Kafka broker in dev mode and when running tests.
 So, you don't have to start a broker manually.
 The application is configured automatically.
 
@@ -52,12 +52,12 @@ Note that the Kafka advertised address is automatically configured with the chos
 [[configuring-the-image]]
 == Configuring the image
 
-Dev Services for Kafka supports https://redpanda.com[Redpanda], https://github/ozangunalp/kafka-native[kafka-native]
+Dev Services for Kafka supports https://redpanda.com[Redpanda], https://github.com/ozangunalp/kafka-native[kafka-native]
 and https://strimzi.io[Strimzi] (in https://github.com/apache/kafka/blob/trunk/config/kraft/README.md[Kraft] mode)  images.
 
 **Redpanda** is a Kafka compatible event streaming platform.
-Because it provides a fast startup times, dev services defaults to Redpanda images from `vectorized/redpanda`.
-You can select any version from https://hub.docker.com/r/vectorized/redpanda.
+Because it provides a fast startup times, Dev Services defaults to Redpanda images from `redpandadata/redpanda`.
+You can select any version from https://hub.docker.com/r/redpandadata/redpanda.
 
 **kafka-native** provides images of standard Apache Kafka distribution compiled to native binary using Quarkus and GraalVM.
 While still being _experimental_, it provides very fast startup times with small footprint.
@@ -82,15 +82,21 @@ For Strimzi, you can select any image with a Kafka version which has Kraft suppo
 
 [source, properties]
 ----
-quarkus.kafka.devservices.image-name=quay.io/strimzi-test-container/test-container:0.105.0-kafka-3.6.0
+quarkus.kafka.devservices.image-name=quay.io/strimzi-test-container/test-container:0.106.0-kafka-3.7.0
 ----
 
 == Configuring Kafka topics
 
 You can configure the Dev Services for Kafka to create topics once the broker is started.
 Topics are created with given number of partitions and 1 replica.
+The syntax is the following:
 
-The following example creates a topic named `test` with 3 partitions, and a second topic named `messages` with 2 partitions.
+[source, properties]
+----
+quarkus.kafka.devservices.topic-partitions.<topic-name>=<number-of-partitions>
+----
+
+The following example creates a topic named `test` with three partitions, and a second topic named `messages` with two partitions.
 
 [source, properties]
 ----
@@ -115,3 +121,43 @@ quarkus.kafka.devservices.redpanda.transaction-enabled=false
 ----
 
 NOTE: Redpanda transactions does not support exactly-once processing.
+
+[[Compose]]
+== Compose
+
+The Kafka Dev Services supports xref:compose-dev-services.adoc[Compose Dev Services].
+It relies on a `compose-devservices.yml`, such as:
+
+[source,yaml]
+----
+name: <application name>
+services:
+  kafka:
+    image: apache/kafka-native:3.9.0
+    restart: "no"
+    ports:
+      - '9092'
+    labels:
+      io.quarkus.devservices.compose.exposed_ports: /etc/kafka/docker/ports
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    command: "/kafka.sh"
+    volumes:
+      - './kafka.sh:/kafka.sh'
+----
+
+For the broker to advertise its externally accessible address to clients, it requires an additional file `kafka.sh` as described in xref:compose-dev-services.adoc#exposing-port-mappings-to-running-containers[Exposing port mappings to running containers].
+
+[[configuration-reference-devservices]]
+== Configuration reference
+
+include::{generated-dir}/config/quarkus-kafka-client_quarkus.kafka.devservices.adoc[opts=optional, leveloffset=+1]

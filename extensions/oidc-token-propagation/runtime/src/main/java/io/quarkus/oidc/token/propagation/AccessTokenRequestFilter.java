@@ -1,7 +1,7 @@
 package io.quarkus.oidc.token.propagation;
 
-import static io.quarkus.oidc.token.propagation.TokenPropagationConstants.JWT_PROPAGATE_TOKEN_CREDENTIAL;
-import static io.quarkus.oidc.token.propagation.TokenPropagationConstants.OIDC_PROPAGATE_TOKEN_CREDENTIAL;
+import static io.quarkus.oidc.token.propagation.common.runtime.TokenPropagationConstants.JWT_PROPAGATE_TOKEN_CREDENTIAL;
+import static io.quarkus.oidc.token.propagation.common.runtime.TokenPropagationConstants.OIDC_PROPAGATE_TOKEN_CREDENTIAL;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -15,8 +15,9 @@ import org.eclipse.microprofile.config.ConfigProvider;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.oidc.client.OidcClient;
-import io.quarkus.oidc.client.OidcClientConfig.Grant;
 import io.quarkus.oidc.client.OidcClients;
+import io.quarkus.oidc.client.runtime.OidcClientConfig.Grant;
+import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.token.propagation.runtime.AbstractTokenRequestFilter;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.security.credential.TokenCredential;
@@ -27,7 +28,7 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     // note: We can't use constructor injection for these fields because they are registered by RESTEasy
     // which doesn't know about CDI at the point of registration
 
-    private static final String ERROR_MSG = "OIDC Token Propagation requires a safe (isolated) Vert.x sub-context because configuration property 'quarkus.oidc-token-propagation.enabled-during-authentication' has been set to true, but the current context hasn't been flagged as such.";
+    private static final String ERROR_MSG = "OIDC Token Propagation requires a safe (isolated) Vert.x sub-context because configuration property 'quarkus.resteasy-client-oidc-token-propagation.enabled-during-authentication' has been set to true, but the current context hasn't been flagged as such.";
     private final boolean enabledDuringAuthentication;
     private final Instance<TokenCredential> accessToken;
 
@@ -52,9 +53,9 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
                                     + "grant.type",
                             Grant.Type.class);
             if (exchangeTokenGrantType == Grant.Type.EXCHANGE) {
-                exchangeTokenProperty = "subject_token";
+                exchangeTokenProperty = OidcConstants.EXCHANGE_GRANT_SUBJECT_TOKEN;
             } else if (exchangeTokenGrantType == Grant.Type.JWT) {
-                exchangeTokenProperty = "assertion";
+                exchangeTokenProperty = OidcConstants.JWT_BEARER_GRANT_ASSERTION;
             } else {
                 throw new ConfigurationException("Token exchange is required but OIDC client is configured "
                         + "to use the " + exchangeTokenGrantType.getGrantType() + " grantType");
@@ -63,7 +64,8 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     }
 
     protected boolean isExchangeToken() {
-        return ConfigProvider.getConfig().getValue("quarkus.oidc-token-propagation.exchange-token", boolean.class);
+        return ConfigProvider.getConfig().getValue("quarkus.resteasy-client-oidc-token-propagation.exchange-token",
+                boolean.class);
     }
 
     @Override
@@ -88,7 +90,8 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     }
 
     protected String getClientName() {
-        return ConfigProvider.getConfig().getOptionalValue("quarkus.oidc-token-propagation.client-name", String.class)
+        return ConfigProvider.getConfig()
+                .getOptionalValue("quarkus.resteasy-client-oidc-token-propagation.client-name", String.class)
                 .orElse(null);
     }
 

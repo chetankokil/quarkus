@@ -1,15 +1,19 @@
 package io.quarkus.cache.redis.runtime;
 
+import java.lang.reflect.Type;
 import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+
+import jakarta.enterprise.util.TypeLiteral;
 
 import org.jboss.logging.Logger;
 
@@ -22,9 +26,11 @@ import io.quarkus.redis.client.RedisClientName;
 import io.quarkus.redis.runtime.datasource.Marshaller;
 import io.quarkus.runtime.BlockingOperationControl;
 import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.subscription.UniEmitter;
 import io.smallrye.mutiny.unchecked.Unchecked;
 import io.smallrye.mutiny.unchecked.UncheckedFunction;
 import io.smallrye.mutiny.vertx.MutinyHelper;
+import io.vertx.core.http.ConnectionPoolTooBusyException;
 import io.vertx.mutiny.core.Vertx;
 import io.vertx.mutiny.redis.client.Command;
 import io.vertx.mutiny.redis.client.Redis;
@@ -40,22 +46,12 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
 
     private static final Logger log = Logger.getLogger(RedisCacheImpl.class);
 
-    private static final Map<String, Class<?>> PRIMITIVE_TO_CLASS_MAPPING = Map.of(
-            "int", Integer.class,
-            "byte", Byte.class,
-            "char", Character.class,
-            "short", Short.class,
-            "long", Long.class,
-            "float", Float.class,
-            "double", Double.class,
-            "boolean", Boolean.class);
-
     private final Vertx vertx;
     private final Redis redis;
 
     private final RedisCacheInfo cacheInfo;
-    private final Class<?> classOfValue;
-    private final Class<?> classOfKey;
+    private final Type classOfValue;
+    private final Type classOfKey;
 
     private final Marshaller marshaller;
 
@@ -81,18 +77,10 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
         this.cacheInfo = cacheInfo;
         this.blockingAllowedSupplier = blockingAllowedSupplier;
 
-        try {
-            this.classOfKey = loadClass(this.cacheInfo.keyType);
-        } catch (ClassNotFoundException e) {
-            throw new IllegalArgumentException("Unable to load the class  " + this.cacheInfo.keyType, e);
-        }
+        this.classOfKey = this.cacheInfo.keyType;
 
         if (this.cacheInfo.valueType != null) {
-            try {
-                this.classOfValue = loadClass(this.cacheInfo.valueType);
-            } catch (ClassNotFoundException e) {
-                throw new IllegalArgumentException("Unable to load the class  " + this.cacheInfo.valueType, e);
-            }
+            this.classOfValue = this.cacheInfo.valueType;
             this.marshaller = new Marshaller(this.classOfValue, this.classOfKey);
         } else {
             this.classOfValue = null;
@@ -102,11 +90,9 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
         this.redis = redis;
     }
 
-    private Class<?> loadClass(String type) throws ClassNotFoundException {
-        if (PRIMITIVE_TO_CLASS_MAPPING.containsKey(type)) {
-            return PRIMITIVE_TO_CLASS_MAPPING.get(type);
-        }
-        return Thread.currentThread().getContextClassLoader().loadClass(type);
+    private static boolean isRecomputableError(Throwable error) {
+        return error instanceof ConnectException
+                || error instanceof ConnectionPoolTooBusyException;
     }
 
     @Override
@@ -121,7 +107,7 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
 
     @Override
     public Class<?> getDefaultValueType() {
-        return classOfValue;
+        return classOfValue instanceof Class<?> ? (Class<?>) classOfValue : null;
     }
 
     private <K> String encodeKey(K key) {
@@ -135,14 +121,29 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                 public V get() {
                     return valueLoader.apply(key);
                 }
-            }).runSubscriptionOn(MutinyHelper.blockingExecutor(vertx.getDelegate()));
+            }).runSubscriptionOn(MutinyHelper.blockingExecutor(vertx.getDelegate(), false));
         } else {
             return Uni.createFrom().item(valueLoader.apply(key));
         }
     }
 
     @Override
+    public <K, V> Uni<V> get(K key, Function<K, V> valueLoader) {
+        enforceDefaultType("get");
+        return get(key, classOfValue, valueLoader);
+    }
+
+    @Override
     public <K, V> Uni<V> get(K key, Class<V> clazz, Function<K, V> valueLoader) {
+        return get(key, (Type) clazz, valueLoader);
+    }
+
+    @Override
+    public <K, V> Uni<V> get(K key, TypeLiteral<V> type, Function<K, V> valueLoader) {
+        return get(key, type.getType(), valueLoader);
+    }
+
+    private <K, V> Uni<V> get(K key, Type type, Function<K, V> valueLoader) {
         // With optimistic locking:
         // WATCH K
         // val = deserialize(GET K)
@@ -165,9 +166,9 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                 Uni<V> startingPoint;
                 if (cacheInfo.useOptimisticLocking) {
                     startingPoint = watch(connection, encodedKey)
-                            .chain(new GetFromConnectionSupplier<>(connection, clazz, encodedKey, marshaller));
+                            .chain(new GetFromConnectionSupplier<>(connection, type, encodedKey, marshaller));
                 } else {
-                    startingPoint = new GetFromConnectionSupplier<>(connection, clazz, encodedKey, marshaller).get();
+                    startingPoint = new GetFromConnectionSupplier<V>(connection, type, encodedKey, marshaller).get();
                 }
 
                 return startingPoint
@@ -199,8 +200,8 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                                                 result = set(connection, encodedKey, encodedValue).replaceWith(value);
                                             }
                                             if (isWorkerThread) {
-                                                return result
-                                                        .runSubscriptionOn(MutinyHelper.blockingExecutor(vertx.getDelegate()));
+                                                return result.runSubscriptionOn(
+                                                        MutinyHelper.blockingExecutor(vertx.getDelegate(), false));
                                             }
                                             return result;
                                         }
@@ -211,7 +212,7 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
             }
         })
 
-                .onFailure(ConnectException.class).recoverWithUni(new Function<Throwable, Uni<? extends V>>() {
+                .onFailure(RedisCacheImpl::isRecomputableError).recoverWithUni(new Function<Throwable, Uni<? extends V>>() {
                     @Override
                     public Uni<? extends V> apply(Throwable e) {
                         log.warn("Unable to connect to Redis, recomputing cached value", e);
@@ -221,7 +222,22 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
     }
 
     @Override
+    public <K, V> Uni<V> getAsync(K key, Function<K, Uni<V>> valueLoader) {
+        enforceDefaultType("getAsync");
+        return getAsync(key, classOfValue, valueLoader);
+    }
+
+    @Override
     public <K, V> Uni<V> getAsync(K key, Class<V> clazz, Function<K, Uni<V>> valueLoader) {
+        return getAsync(key, (Type) clazz, valueLoader);
+    }
+
+    @Override
+    public <K, V> Uni<V> getAsync(K key, TypeLiteral<V> type, Function<K, Uni<V>> valueLoader) {
+        return getAsync(key, type.getType(), valueLoader);
+    }
+
+    private <K, V> Uni<V> getAsync(K key, Type type, Function<K, Uni<V>> valueLoader) {
         byte[] encodedKey = marshaller.encode(computeActualKey(encodeKey(key)));
         return withConnection(new Function<RedisConnection, Uni<V>>() {
             @Override
@@ -229,9 +245,9 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                 Uni<V> startingPoint;
                 if (cacheInfo.useOptimisticLocking) {
                     startingPoint = watch(connection, encodedKey)
-                            .chain(new GetFromConnectionSupplier<>(connection, clazz, encodedKey, marshaller));
+                            .chain(new GetFromConnectionSupplier<>(connection, type, encodedKey, marshaller));
                 } else {
-                    startingPoint = new GetFromConnectionSupplier<>(connection, clazz, encodedKey, marshaller).get();
+                    startingPoint = new GetFromConnectionSupplier<V>(connection, type, encodedKey, marshaller).get();
                 }
 
                 return startingPoint
@@ -260,7 +276,7 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                         });
             }
         })
-                .onFailure(ConnectException.class).recoverWithUni(e -> {
+                .onFailure(RedisCacheImpl::isRecomputableError).recoverWithUni(e -> {
                     log.warn("Unable to connect to Redis, recomputing cached value", e);
                     return valueLoader.apply(key);
                 });
@@ -283,35 +299,63 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
         });
     }
 
-    private void enforceDefaultType() {
+    private void enforceDefaultType(String methodName) {
         if (classOfValue == null) {
-            throw new UnsupportedOperationException(
-                    "Cannot execute the operation without the default type configured in cache " + cacheInfo.name);
+            throw new UnsupportedOperationException("Cannot use `" + methodName + "` method without a default type configured. "
+                    + "Consider using the `" + methodName
+                    + "` method accepting the type or configure the default type for the cache "
+                    + getName());
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public <K, V> Uni<V> getOrDefault(K key, V defaultValue) {
-        enforceDefaultType();
+        enforceDefaultType("getOrDefault");
+        return getOrDefault(key, classOfValue, defaultValue);
+    }
+
+    @Override
+    public <K, V> Uni<V> getOrDefault(K key, Class<V> clazz, V defaultValue) {
+        return getOrDefault(key, (Type) clazz, defaultValue);
+    }
+
+    @Override
+    public <K, V> Uni<V> getOrDefault(K key, TypeLiteral<V> type, V defaultValue) {
+        return getOrDefault(key, type.getType(), defaultValue);
+    }
+
+    private <K, V> Uni<V> getOrDefault(K key, Type type, V defaultValue) {
         byte[] encodedKey = marshaller.encode(computeActualKey(encodeKey(key)));
         return withConnection(new Function<RedisConnection, Uni<V>>() {
             @Override
             public Uni<V> apply(RedisConnection redisConnection) {
-                return (Uni<V>) doGet(redisConnection, encodedKey, classOfValue, marshaller);
+                return doGet(redisConnection, encodedKey, type, marshaller);
             }
         }).onItem().ifNull().continueWith(new StaticSupplier<>(defaultValue));
     }
 
     @Override
-    @SuppressWarnings("unchecked")
+    public <K, V> Uni<V> getOrNull(K key) {
+        enforceDefaultType("getOrNull");
+        return getOrNull(key, classOfValue);
+    }
+
+    @Override
     public <K, V> Uni<V> getOrNull(K key, Class<V> clazz) {
-        enforceDefaultType();
+        return getOrNull(key, (Type) clazz);
+    }
+
+    @Override
+    public <K, V> Uni<V> getOrNull(K key, TypeLiteral<V> type) {
+        return getOrNull(key, type.getType());
+    }
+
+    private <K, V> Uni<V> getOrNull(K key, Type type) {
         byte[] encodedKey = marshaller.encode(computeActualKey(encodeKey(key)));
         return withConnection(new Function<RedisConnection, Uni<V>>() {
             @Override
             public Uni<V> apply(RedisConnection redisConnection) {
-                return (Uni<V>) doGet(redisConnection, encodedKey, classOfValue, marshaller);
+                return doGet(redisConnection, encodedKey, type, marshaller);
             }
         });
     }
@@ -330,41 +374,70 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
 
     @Override
     public Uni<Void> invalidateIf(Predicate<Object> predicate) {
-        return redis.send(Request.cmd(Command.KEYS).arg(getKeyPattern()))
-                .<List<String>> map(response -> marshaller.decodeAsList(response, String.class))
-                .chain(new Function<List<String>, Uni<?>>() {
-                    @Override
-                    public Uni<?> apply(List<String> listOfKeys) {
-                        var req = Request.cmd(Command.DEL);
-                        boolean hasAtLEastOneMatch = false;
-                        for (String key : listOfKeys) {
-                            Object userKey = computeUserKey(key);
-                            if (predicate.test(userKey)) {
-                                hasAtLEastOneMatch = true;
-                                req.arg(marshaller.encode(key));
-                            }
-                        }
-                        if (hasAtLEastOneMatch) {
-                            // We cannot send the command with parameters, it would not be a valid command.
-                            return redis.send(req);
-                        } else {
-                            return Uni.createFrom().voidItem();
-                        }
+        return Uni.createFrom().emitter(new Consumer<UniEmitter<? super Set<String>>>() {
+            @Override
+            public void accept(UniEmitter<? super Set<String>> uniEmitter) {
+                scanForKeys("0", new HashSet<>(), uniEmitter);
+            }
+        }).chain(new Function<Set<String>, Uni<?>>() {
+            @Override
+            public Uni<?> apply(Set<String> setOfKeys) {
+                var req = Request.cmd(Command.DEL);
+                boolean hasAtLeastOneMatch = false;
+                for (String key : setOfKeys) {
+                    Object userKey = computeUserKey(key);
+                    if (predicate.test(userKey)) {
+                        hasAtLeastOneMatch = true;
+                        req.arg(marshaller.encode(key));
                     }
-                })
+                }
+                if (hasAtLeastOneMatch) {
+                    // We cannot send the command without parameters, it would not be a valid command.
+                    return redis.send(req);
+                } else {
+                    return Uni.createFrom().voidItem();
+                }
+            }
+        })
                 .replaceWithVoid();
     }
 
-    String computeActualKey(String key) {
-        if (cacheInfo.prefix != null) {
-            return cacheInfo.prefix + ":" + key;
-        } else {
-            return "cache:" + getName() + ":" + key;
+    private void scanForKeys(String cursor, Set<String> result, UniEmitter<? super Set<String>> em) {
+        Request cmd = Request.cmd(Command.SCAN).arg(cursor)
+                .arg("MATCH").arg(getKeyPattern());
+        if (cacheInfo.invalidationScanSize.isPresent()) {
+            cmd.arg("COUNT").arg(cacheInfo.invalidationScanSize.getAsInt());
         }
+        redis.send(cmd)
+                .subscribe().with(new Consumer<Response>() {
+                    @Override
+                    public void accept(Response response) {
+                        String newCursor = response.get(0).toString();
+                        Response partResponse = response.get(1);
+                        if (partResponse != null) {
+                            result.addAll(marshaller.decodeAsList(partResponse, String.class));
+                        }
+                        if ("0".equals(newCursor)) {
+                            em.complete(result);
+                        } else {
+                            scanForKeys(newCursor, result, em);
+                        }
+                    }
+                }, new Consumer<Throwable>() {
+                    @Override
+                    public void accept(Throwable throwable) {
+                        em.fail(throwable);
+                    }
+                });
+    }
+
+    // visible only for tests
+    public String computeActualKey(String key) {
+        return getKeyPrefix() + ":" + key;
     }
 
     Object computeUserKey(String key) {
-        String prefix = cacheInfo.prefix != null ? cacheInfo.prefix : "cache:" + getName();
+        String prefix = getKeyPrefix();
         if (!key.startsWith(prefix + ":")) {
             return null; // Not a key handle by the cache.
         }
@@ -373,10 +446,14 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
     }
 
     private String getKeyPattern() {
+        return getKeyPrefix() + ":*";
+    }
+
+    private String getKeyPrefix() {
         if (cacheInfo.prefix != null) {
-            return cacheInfo.prefix + ":" + "*";
+            return cacheInfo.prefix.replace("{cache-name}", getName());
         } else {
-            return "cache:" + getName() + ":" + "*";
+            return "cache:" + getName();
         }
     }
 
@@ -402,7 +479,7 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
                 .replaceWithVoid();
     }
 
-    private <X> Uni<X> doGet(RedisConnection connection, byte[] encoded, Class<X> clazz,
+    private <X> Uni<X> doGet(RedisConnection connection, byte[] encoded, Type clazz,
             Marshaller marshaller) {
         if (cacheInfo.expireAfterAccess.isPresent()) {
             Duration duration = cacheInfo.expireAfterAccess.get();
@@ -464,11 +541,11 @@ public class RedisCacheImpl extends AbstractCache implements RedisCache {
 
     private class GetFromConnectionSupplier<V> implements Supplier<Uni<? extends V>> {
         private final RedisConnection connection;
-        private final Class<V> clazz;
+        private final Type clazz;
         private final byte[] encodedKey;
         private final Marshaller marshaller;
 
-        public GetFromConnectionSupplier(RedisConnection connection, Class<V> clazz, byte[] encodedKey, Marshaller marshaller) {
+        public GetFromConnectionSupplier(RedisConnection connection, Type clazz, byte[] encodedKey, Marshaller marshaller) {
             this.connection = connection;
             this.clazz = clazz;
             this.encodedKey = encodedKey;

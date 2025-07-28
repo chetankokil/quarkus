@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -66,6 +67,8 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
         System.setProperty("picocli.endofoptions.description", "End of command line options.");
     }
 
+    private static final Set<String> CATCH_ALL_COMMANDS = Set.of("create", "image", "extension", "ext", "plugin", "plug");
+
     @Inject
     CommandLine.IFactory factory;
 
@@ -104,6 +107,7 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
         boolean noCommand = args.length == 0 || args[0].startsWith("-");
         boolean helpCommand = Arrays.stream(args).anyMatch(arg -> arg.equals("--help"));
         boolean pluginCommand = args.length >= 1 && (args[0].equals("plug") || args[0].equals("plugin"));
+        boolean pluginSyncCommand = pluginCommand && args.length >= 2 && args[1].equals("sync");
 
         try {
             Optional<String> missingCommand = checkMissingCommand(cmd, args);
@@ -117,12 +121,14 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
             }
             PluginCommandFactory pluginCommandFactory = new PluginCommandFactory(output);
             PluginManager pluginManager = pluginManager(output, testDir, interactiveMode);
-            pluginManager.syncIfNeeded();
+            if (!pluginSyncCommand) { // Let`s not sync before the actual command
+                pluginManager.syncIfNeeded();
+            }
             Map<String, Plugin> plugins = new HashMap<>(pluginManager.getInstalledPlugins());
             pluginCommandFactory.populateCommands(cmd, plugins);
             missingCommand.filter(m -> !plugins.containsKey(m)).ifPresent(m -> {
                 try {
-                    output.info("Command %s is not available, looking for available plugins ...", m);
+                    output.info("Unable to match command `%s`, looking for available plugins...", m);
                     Map<String, Plugin> installable = pluginManager.getInstallablePlugins();
                     if (installable.containsKey(m)) {
                         Plugin candidate = installable.get(m);
@@ -137,10 +143,10 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
                             pluginCommandFactory.populateCommands(cmd, plugins);
                         }
                     } else {
-                        output.error("Command %s is missing and can't be installed.", m);
+                        output.error("Unable to match command `%s` and a corresponding plugin couldn't be installed.", m);
                     }
                 } catch (Exception e) {
-                    output.error("Command %s is missing and can't be installed.", m);
+                    output.error("Unable to match command `%s` and a corresponding plugin couldn't be installed.", m);
                 }
             });
         } catch (MutuallyExclusiveArgsException e) {
@@ -154,7 +160,7 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
      *
      * @param root the root command
      * @param args the arguments passed to the root command
-     * @retunr the missing subcommand wrapped in {@link Optional} or empty if no subcommand is missing.
+     * @return the missing subcommand wrapped in {@link Optional} or empty if no subcommand is missing.
      */
     public Optional<String> checkMissingCommand(CommandLine root, String[] args) {
         if (args.length == 0) {
@@ -163,6 +169,12 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
 
         try {
             ParseResult currentParseResult = root.parseArgs(args);
+
+            // some commands are catch all and they will match always
+            if (CATCH_ALL_COMMANDS.contains(currentParseResult.commandSpec().name())) {
+                return Optional.empty();
+            }
+
             StringBuilder missingCommand = new StringBuilder();
 
             do {
@@ -172,10 +184,12 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
                 missingCommand.append(currentParseResult.commandSpec().name());
 
                 List<String> unmatchedSubcommands = currentParseResult.unmatched().stream()
-                        .filter(u -> !u.startsWith("-")).collect(Collectors.toList());
+                        .takeWhile(u -> !u.startsWith("-"))
+                        .collect(Collectors.toList());
                 if (!unmatchedSubcommands.isEmpty()) {
                     missingCommand.append("-").append(unmatchedSubcommands.get(0));
-                    return Optional.of(missingCommand.toString());
+                    // We don't want the root itself to be added to the result
+                    return Optional.of(stripRootPrefix(missingCommand.toString(), root.getCommandName() + "-"));
                 }
 
                 currentParseResult = currentParseResult.subcommand();
@@ -183,8 +197,26 @@ public class QuarkusCli implements QuarkusApplication, Callable<Integer> {
 
             return Optional.empty();
         } catch (UnmatchedArgumentException e) {
+            // the first element was matched so it's not missing
+            if (e.getCommandLine() != root) {
+                return Optional.empty();
+            }
+
             return Optional.of(args[0]);
+        } catch (Exception e) {
+            // For any other exceptions (e.g. MissingParameterException), we should just ignore.
+            // The problem is not that the command is missing but that the options might not be adequate.
+            // This will be handled by Picocli at a later step.
+            return Optional.empty();
         }
+    }
+
+    private static String stripRootPrefix(String command, String rootPrefix) {
+        if (!command.startsWith(rootPrefix)) {
+            return command;
+        }
+
+        return command.substring(rootPrefix.length());
     }
 
     @Override
